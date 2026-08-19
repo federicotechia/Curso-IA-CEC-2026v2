@@ -1,0 +1,3557 @@
+import React, { useState, useEffect, ReactNode } from 'react';
+import { 
+  BookOpen, 
+  Users, 
+  MessageSquare, 
+  FileText, 
+  ChevronDown, 
+  ChevronUp, 
+  Plus, 
+  Download, 
+  CheckCircle, 
+  Clock, 
+  Video, 
+  Link as LinkIcon, 
+  File as FileIcon,
+  Eye,
+  EyeOff,
+  Book,
+  LogOut,
+  Send,
+  UserPlus,
+  ShieldCheck,
+  Loader2,
+  AlertCircle,
+  Edit,
+  X,
+  Trash2,
+  Upload,
+  FileUp,
+  ExternalLink,
+  CornerDownRight,
+  ArrowUp,
+  ArrowDown,
+  Search,
+  Filter,
+  History,
+  Info,
+  MessageCircle,
+  GraduationCap,
+  User,
+  Save,
+  Layers,
+  Archive
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import Markdown from 'react-markdown';
+import { ClassModule, ForumPost, Submission, UserProfile, UserRole, Task, SurveyResponse, Edition } from './types';
+import { EditionSelector } from './components/EditionSelector';
+import { EditionsManager } from './components/EditionsManager';
+import { auth, db, storage, googleProvider, handleFirestoreError, OperationType, firestoreDatabaseId } from './lib/firebase';
+import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { 
+  collection, 
+  doc, 
+  onSnapshot, 
+  setDoc, 
+  getDoc, 
+  updateDoc, 
+  addDoc, 
+  deleteDoc,
+  query, 
+  orderBy, 
+  where
+} from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+
+interface CustomQuestion {
+  id: string;
+  text: string;
+  type: 'text' | 'select';
+  options?: string[];
+  required?: boolean;
+}
+
+interface SurveyConfig {
+  toolsOptions: string[];
+  advancedTools: string[];
+  frequencyOptions: string[];
+  technicalOptions: string[];
+  advancedThresholdFrequency: string;
+  advancedThresholdTechnical: string;
+  customQuestions?: CustomQuestion[];
+}
+
+const DEFAULT_SURVEY_CONFIG: SurveyConfig = {
+  toolsOptions: [
+    'ChatGPT', 'Claude', 'Gemini', 'Midjourney', 'Perplexity', 'Copilot', 
+    'AI Studio', 'Codex', 'Claude Code', 'Nano Banana', 'Antigravity', 
+    'Cursor', 'Vercel', 'Lovable', 'Ninguna'
+  ],
+  advancedTools: ['AI Studio', 'Codex', 'Claude Code', 'Nano Banana', 'Antigravity', 'Cursor', 'Vercel', 'Lovable'],
+  frequencyOptions: ['Diario', 'Semanal', 'Mensual', 'Nunca'],
+  technicalOptions: ['Sí', 'No', 'He oído hablar'],
+  advancedThresholdFrequency: 'Diario',
+  advancedThresholdTechnical: 'Sí',
+  customQuestions: [
+    {
+      id: 'has_laptop',
+      text: '¿Cuentas con una notebook personal para poder instalar herramientas de desarrollo?',
+      type: 'select',
+      options: ['Sí', 'No'],
+      required: true
+    }
+  ]
+};
+
+export const DEFAULT_EDITION_ID = 'edicion-ia-aplicada-cec-2026';
+export const DEFAULT_EDITION_NAME = 'IA Aplicada - CEC / 2026';
+
+// Configuración de Marca - Reemplazar con URLs de imágenes si se desea usar logos reales
+const BRAND_CONFIG = {
+  logoUrl: 'https://drive.google.com/file/d/16m2tjbzpzU3rPc1v53viQtOu9ev3QUvu/view?usp=drive_link', // URL para el logo de la Fundación (ej: /logo-fundacion.png)
+  cecLogoUrl: 'https://drive.google.com/file/d/18aquZAnSXpSVVNjNXUEbdmeTNS-frlT0/view?usp=drive_link', // URL para el logo del CEC (ej: /logo-cec.png)
+};
+
+// Función auxiliar para convertir links de Google Drive en links directos de imagen
+const getDirectImageUrl = (url: string) => {
+  if (!url) return '';
+  if (url.includes('drive.google.com')) {
+    // Regex mejorada para capturar el ID de forma más robusta
+    const idMatch = url.match(/\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (idMatch && idMatch[1]) {
+      // El endpoint de thumbnail es más confiable para evitar bloqueos de Google
+      return `https://drive.google.com/thumbnail?id=${idMatch[1]}&sz=w1000`;
+    }
+  }
+  return url;
+};
+
+const BrandLogo = ({ variant = 'full', light = false, className = "" }: { variant?: 'full' | 'cec', light?: boolean, className?: string }) => {
+  const [cecError, setCecError] = useState(false);
+  const [logoError, setLogoError] = useState(false);
+  const textColor = light ? 'text-white' : 'text-brand-dark';
+  
+  // Reiniciar errores si cambian las URLs
+  useEffect(() => {
+    setCecError(false);
+    setLogoError(false);
+  }, [BRAND_CONFIG.cecLogoUrl, BRAND_CONFIG.logoUrl]);
+
+  if (variant === 'cec') {
+    const cecUrl = getDirectImageUrl(BRAND_CONFIG.cecLogoUrl);
+    if (cecUrl && !cecError) {
+      return (
+        <img 
+          src={cecUrl} 
+          alt="CEC Logo" 
+          className={`h-20 w-auto max-w-[180px] object-contain ${className}`} 
+          referrerPolicy="no-referrer"
+          onError={() => setCecError(true)}
+        />
+      );
+    }
+    return (
+      <div className={`flex flex-col leading-none ${className}`}>
+        <span className={`text-2xl font-black ${textColor} tracking-tighter`}>CEC</span>
+        <span className={`text-[8px] font-bold ${textColor} tracking-widest uppercase opacity-80`}>Comunidad Educativa Crucianelli</span>
+      </div>
+    );
+  }
+
+  const logoUrl = getDirectImageUrl(BRAND_CONFIG.logoUrl);
+  if (logoUrl && !logoError) {
+    return (
+      <img 
+        src={logoUrl} 
+        alt="Fundación Logo" 
+        className={`h-12 w-auto object-contain ${className}`} 
+        referrerPolicy="no-referrer"
+        onError={() => setLogoError(true)}
+      />
+    );
+  }
+
+  return (
+    <div className={`flex items-center gap-3 ${className}`}>
+      <div className="w-1.5 h-12 bg-brand-red rounded-full" />
+      <div className="flex flex-col leading-none">
+        <span className={`text-[10px] font-bold ${textColor} tracking-widest`}>FUNDACIÓN</span>
+        <span className={`text-xl font-black ${textColor} tracking-tighter`}>NAZARENO</span>
+        <span className={`text-xl font-black ${textColor} tracking-tighter`}>CRUCIANELLI</span>
+      </div>
+    </div>
+  );
+};
+
+function SurveyView({ profile, config, onComplete, onLogout }: { profile: UserProfile, config: SurveyConfig, onComplete: (data: any) => void, onLogout: () => void }) {
+  const [step, setStep] = useState(0);
+  const [responses, setResponses] = useState({
+    familiarity: 3,
+    tools: [] as string[],
+    frequency: '',
+    professional_profile: '',
+    automation_goal: '',
+    technical_validation: '',
+    custom_responses: {} as Record<string, string>
+  });
+
+  const toolsOptions = config.toolsOptions;
+  const frequencyOptions = config.frequencyOptions;
+  const technicalOptions = config.technicalOptions;
+  const customQuestions = config.customQuestions || [];
+
+  const handleNext = () => setStep(s => s + 1);
+  const handleBack = () => setStep(s => s - 1);
+
+  const handleSubmit = () => {
+    onComplete(responses);
+  };
+
+  const isStepValid = () => {
+    if (step === 1) return responses.familiarity >= 1;
+    if (step === 2) return responses.tools.length > 0;
+    if (step === 3) return responses.frequency !== '';
+    if (step === 4) return responses.professional_profile.trim() !== '';
+    if (step === 5) return responses.automation_goal.trim() !== '';
+    if (step === 6) return responses.technical_validation !== '';
+    
+    // Custom steps
+    const customStepIdx = step - 7;
+    if (customStepIdx >= 0 && customStepIdx < customQuestions.length) {
+      const q = customQuestions[customStepIdx];
+      if (q.required) {
+        return !!responses.custom_responses[q.id]?.trim();
+      }
+    }
+    return true;
+  };
+
+  const baseSteps = [
+    {
+      title: "¡Hola!",
+      content: (
+        <div className="text-center">
+          <p className="text-slate-600 mb-6 leading-relaxed">
+            Antes de empezar, queremos conocerte mejor. Esta encuesta nos ayudará a ajustar los ejemplos de las clases a tu realidad profesional y nivel actual. No te llevará más de 2 minutos.
+          </p>
+          <button onClick={handleNext} className="w-full py-4 bg-brand-red text-white rounded-2xl font-bold hover:bg-brand-red/90 transition-all shadow-lg shadow-brand-red/20 active:scale-95">
+            Comenzar
+          </button>
+        </div>
+      )
+    },
+    {
+      title: "¿Qué tan familiarizado estás con la IA?",
+      content: (
+        <div className="space-y-6">
+          <div className="flex justify-between items-center px-2">
+            {[1, 2, 3, 4, 5].map(n => (
+              <button 
+                key={n}
+                onClick={() => setResponses(r => ({ ...r, familiarity: n }))}
+                className={`w-12 h-12 rounded-xl font-bold transition-all ${responses.familiarity === n ? 'bg-brand-red text-white scale-110 shadow-lg shadow-brand-red/20' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+          <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2">
+            <span>Nada</span>
+            <span>Experto</span>
+          </div>
+        </div>
+      )
+    },
+    {
+      title: "¿Qué herramientas conoces o has usado?",
+      content: (
+        <div className="grid grid-cols-2 gap-3">
+          {toolsOptions.map(tool => (
+            <button 
+              key={tool}
+              onClick={() => {
+                setResponses(r => {
+                  const tools = r.tools.includes(tool) 
+                    ? r.tools.filter(t => t !== tool)
+                    : [...r.tools, tool];
+                  return { ...r, tools };
+                });
+              }}
+              className={`p-3 rounded-xl text-sm font-bold border-2 transition-all ${responses.tools.includes(tool) ? 'border-brand-red bg-brand-red/5 text-brand-red' : 'border-slate-100 text-slate-500 hover:border-slate-200'}`}
+            >
+              {tool}
+            </button>
+          ))}
+        </div>
+      )
+    },
+    {
+      title: "¿Con qué frecuencia usas herramientas de IA?",
+      content: (
+        <div className="space-y-3">
+          {frequencyOptions.map(opt => (
+            <button 
+              key={opt}
+              onClick={() => setResponses(r => ({ ...r, frequency: opt }))}
+              className={`w-full p-4 rounded-xl text-left text-sm font-bold border-2 transition-all flex items-center justify-between ${responses.frequency === opt ? 'border-brand-red bg-brand-red/5 text-brand-red' : 'border-slate-100 text-slate-500 hover:border-slate-200'}`}
+            >
+              {opt}
+              {responses.frequency === opt && <CheckCircle size={18} />}
+            </button>
+          ))}
+        </div>
+      )
+    },
+    {
+      title: "¿Cuál es tu perfil profesional?",
+      content: (
+        <div className="space-y-4">
+          <input 
+            type="text"
+            placeholder="Ej: Contador, Abogado, Administrativo..."
+            value={responses.professional_profile}
+            onChange={(e) => setResponses(r => ({ ...r, professional_profile: e.target.value }))}
+            className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-brand-red transition-all"
+          />
+        </div>
+      )
+    },
+    {
+      title: "¿Qué tarea específica te gustaría delegar a una IA?",
+      content: (
+        <div className="space-y-4">
+          <textarea 
+            placeholder="Describe una tarea repetitiva o compleja que te gustaría automatizar..."
+            value={responses.automation_goal}
+            onChange={(e) => setResponses(r => ({ ...r, automation_goal: e.target.value }))}
+            className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-brand-red transition-all h-32 resize-none"
+          />
+        </div>
+      )
+    },
+    {
+      title: "¿Conoces conceptos como 'Few-shot prompting', 'Temperatura' o 'Tokens'?",
+      content: (
+        <div className="space-y-3">
+          {technicalOptions.map(opt => (
+            <button 
+              key={opt}
+              onClick={() => setResponses(r => ({ ...r, technical_validation: opt }))}
+              className={`w-full p-4 rounded-xl text-left text-sm font-bold border-2 transition-all flex items-center justify-between ${responses.technical_validation === opt ? 'border-brand-red bg-brand-red/5 text-brand-red' : 'border-slate-100 text-slate-500 hover:border-slate-200'}`}
+            >
+              {opt}
+              {responses.technical_validation === opt && <CheckCircle size={18} />}
+            </button>
+          ))}
+        </div>
+      )
+    }
+  ];
+
+  const dynamicSteps = customQuestions.map(q => ({
+    title: q.text,
+    content: (
+      <div className="space-y-3">
+        {q.type === 'select' ? (
+          <div className="space-y-3">
+            {q.options?.map(opt => (
+              <button 
+                key={opt}
+                onClick={() => setResponses(r => ({ 
+                  ...r, 
+                  custom_responses: { ...r.custom_responses, [q.id]: opt } 
+                }))}
+                className={`w-full p-4 rounded-xl text-left text-sm font-bold border-2 transition-all flex items-center justify-between ${responses.custom_responses[q.id] === opt ? 'border-brand-red bg-brand-red/5 text-brand-red' : 'border-slate-100 text-slate-500 hover:border-slate-200'}`}
+              >
+                {opt}
+                {responses.custom_responses[q.id] === opt && <CheckCircle size={18} />}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <textarea 
+            placeholder="Escribe tu respuesta aquí..."
+            value={responses.custom_responses[q.id] || ''}
+            onChange={(e) => setResponses(r => ({ 
+              ...r, 
+              custom_responses: { ...r.custom_responses, [q.id]: e.target.value } 
+            }))}
+            className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:border-brand-red transition-all h-32 resize-none"
+          />
+        )}
+      </div>
+    )
+  }));
+
+  const steps = [...baseSteps, ...dynamicSteps];
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-brand-gray p-4">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-white p-8 md:p-10 rounded-[40px] shadow-2xl w-full max-w-lg border-b-8 border-brand-red relative overflow-hidden"
+      >
+        {/* Progress Bar */}
+        {step > 0 && (
+          <div className="absolute top-0 left-0 w-full h-1.5 bg-slate-100">
+            <motion.div 
+              className="h-full bg-brand-red"
+              initial={{ width: 0 }}
+              animate={{ width: `${(step / (steps.length - 1)) * 100}%` }}
+            />
+          </div>
+        )}
+
+        <div className="mb-8">
+          <div className="flex justify-between items-center mb-6">
+            <BrandLogo variant="cec" className="scale-75 origin-left" />
+            {step > 0 && (
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Paso {step} de {steps.length - 1}</span>
+            )}
+          </div>
+          <h2 className="text-2xl font-extrabold text-brand-dark tracking-tight leading-tight">
+            {steps[step].title}
+          </h2>
+        </div>
+
+        <div className="mb-10">
+          {steps[step].content}
+        </div>
+
+        {step > 0 && (
+          <div className="flex gap-3">
+            <button 
+              onClick={handleBack}
+              className="px-6 py-4 bg-slate-100 text-slate-500 rounded-2xl font-bold hover:bg-slate-200 transition-all"
+            >
+              Atrás
+            </button>
+            {step === steps.length - 1 ? (
+              <button 
+                onClick={handleSubmit}
+                disabled={!isStepValid()}
+                className="flex-1 py-4 bg-brand-red text-white rounded-2xl font-bold hover:bg-brand-red/90 transition-all shadow-lg shadow-brand-red/20 disabled:opacity-50 disabled:shadow-none active:scale-95"
+              >
+                Finalizar
+              </button>
+            ) : (
+              <button 
+                onClick={handleNext}
+                disabled={!isStepValid()}
+                className="flex-1 py-4 bg-brand-red text-white rounded-2xl font-bold hover:bg-brand-red/90 transition-all shadow-lg shadow-brand-red/20 disabled:opacity-50 disabled:shadow-none active:scale-95"
+              >
+                Siguiente
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="mt-8 pt-8 border-t border-slate-100 flex justify-center">
+          <button 
+            onClick={onLogout}
+            className="text-slate-400 hover:text-brand-red transition-colors flex items-center gap-2 font-bold text-[10px] uppercase tracking-widest"
+          >
+            <LogOut size={14} /> Salir
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function AppContent() {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [editions, setEditions] = useState<Edition[]>([]);
+  const [selectedEditionId, setSelectedEditionId] = useState<string>(DEFAULT_EDITION_ID);
+  const [modules, setModules] = useState<ClassModule[]>([]);
+  const [forum, setForum] = useState<ForumPost[]>([]);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [pendingUsers, setPendingUsers] = useState<UserProfile[]>([]);
+  const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
+  const [surveyResponses, setSurveyResponses] = useState<SurveyResponse[]>([]);
+  const [viewingSurveyResponse, setViewingSurveyResponse] = useState<SurveyResponse | null>(null);
+  const [expandedModule, setExpandedModule] = useState<string | null>(null);
+  const [newPost, setNewPost] = useState('');
+  const [submissionUrl, setSubmissionUrl] = useState<{ [key: string]: string }>({});
+  const [submissionComment, setSubmissionComment] = useState<{ [key: string]: string }>({});
+  const [activeTab, setActiveTab] = useState<'clases' | 'foro' | 'tareas' | 'admin' | 'ediciones'>('clases');
+  const [showNewModuleModal, setShowNewModuleModal] = useState(false);
+  const [showNewTaskModal, setShowNewTaskModal] = useState(false);
+  const [newModuleTitle, setNewModuleTitle] = useState('');
+  const [newModuleDescription, setNewModuleDescription] = useState('');
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskDescription, setNewTaskDescription] = useState('');
+  const [newTaskDeadline, setNewTaskDeadline] = useState('');
+  const [newTaskAttachmentUrl, setNewTaskAttachmentUrl] = useState('');
+  const [editingModule, setEditingModule] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<string | null>(null);
+  const [editModuleData, setEditModuleData] = useState<any>(null);
+  const [editTaskData, setEditTaskData] = useState<any>(null);
+  const [uploading, setUploading] = useState<string | null>(null); // moduleId-type-index or 'submission-taskId'
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState('');
+  const [uploadProgress, setUploadProgress] = useState<{[key: string]: number}>({});
+  const [notification, setNotification] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+  const [surveyConfig, setSurveyConfig] = useState<SurveyConfig>(DEFAULT_SURVEY_CONFIG);
+  const [isAdminUsersCollapsed, setIsAdminUsersCollapsed] = useState(false);
+  const [gradingSubmission, setGradingSubmission] = useState<Submission | null>(null);
+  const [gradingUserProfile, setGradingUserProfile] = useState<UserProfile | null>(null);
+  const [feedbackText, setFeedbackText] = useState('');
+  const [userFeedbackText, setUserFeedbackText] = useState('');
+  const [confirmModal, setConfirmModal] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  }>({ show: false, title: '', message: '', onConfirm: () => {} });
+
+  const [taskSearch, setTaskSearch] = useState('');
+  const [taskFilter, setTaskFilter] = useState<'all' | 'pending' | 'completed'>('all');
+
+  // Clear notification after 5 seconds
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
+
+  // Auth Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      setUser(firebaseUser);
+      if (firebaseUser) {
+        // Fetch survey config
+        getDoc(doc(db, 'config', 'survey')).then(docSnap => {
+          if (docSnap.exists()) {
+            setSurveyConfig(docSnap.data() as SurveyConfig);
+          }
+        });
+
+        const userDocRef = doc(db, 'users', firebaseUser.uid);
+        try {
+          const userDoc = await getDoc(userDocRef);
+          if (userDoc.exists()) {
+            const data = userDoc.data() as UserProfile;
+            // Force admin status for the owner even if already exists
+            if (firebaseUser.email === 'federicotechia@gmail.com' && (data.role !== 'administrador' || data.status !== 'approved')) {
+              const updatedProfile = { ...data, role: 'administrador' as const, status: 'approved' as const };
+              await setDoc(userDocRef, updatedProfile, { merge: true });
+              setProfile(updatedProfile);
+            } else {
+              setProfile(data);
+            }
+          } else {
+            // Pre-registration logic
+            const isAdminEmail = ["federicotechia@gmail.com", "fede.trillini@gmail.com"].includes(firebaseUser.email || '');
+            const newProfile: UserProfile = {
+              uid: firebaseUser.uid,
+              email: firebaseUser.email || '',
+              displayName: firebaseUser.displayName || 'Usuario',
+              role: isAdminEmail ? 'administrador' : 'alumno',
+              status: isAdminEmail ? 'approved' : 'pending',
+              enrolledEditions: [DEFAULT_EDITION_ID]
+            };
+            await setDoc(userDocRef, newProfile);
+            setProfile(newProfile);
+          }
+        } catch (error) {
+          handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+        }
+      } else {
+        setProfile(null);
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Editions Listener & Auto-Bootstrap
+  useEffect(() => {
+    if (!profile || profile.status !== 'approved') return;
+
+    const editionsQuery = query(collection(db, 'editions'), orderBy('createdAt', 'asc'));
+    const unsubscribeEditions = onSnapshot(editionsQuery, async (snapshot) => {
+      let fetchedEditions = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Edition));
+      
+      // Auto-bootstrap default initial edition if none exists
+      if (fetchedEditions.length === 0) {
+        if (profile.role === 'profesor' || profile.role === 'administrador') {
+          const defaultEdition: Edition = {
+            id: DEFAULT_EDITION_ID,
+            name: DEFAULT_EDITION_NAME,
+            description: 'Edición principal del curso de Inteligencia Artificial - Comunidad Educativa Crucianelli.',
+            isActive: true,
+            status: 'activa',
+            createdAt: new Date().toISOString(),
+            createdOrder: 1
+          };
+          try {
+            await setDoc(doc(db, 'editions', DEFAULT_EDITION_ID), defaultEdition);
+            fetchedEditions = [defaultEdition];
+          } catch (e) {
+            console.error("Error creating default edition:", e);
+          }
+        }
+      }
+
+      setEditions(fetchedEditions);
+
+      // Select active edition or first enrolled edition for student
+      setSelectedEditionId(current => {
+        if (current && fetchedEditions.some(e => e.id === current)) {
+          return current;
+        }
+        if (profile.role === 'alumno') {
+          const enrolled = profile.enrolledEditions || [];
+          if (enrolled.length > 0) {
+            const matched = fetchedEditions.find(e => enrolled.includes(e.id));
+            if (matched) return matched.id;
+          }
+        }
+        const active = fetchedEditions.find(e => e.isActive);
+        return active ? active.id : (fetchedEditions[0]?.id || DEFAULT_EDITION_ID);
+      });
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'editions'));
+
+    return () => unsubscribeEditions();
+  }, [profile]);
+
+  // Data Listeners
+  useEffect(() => {
+    if (!profile || profile.status !== 'approved') return;
+
+    // Modules
+    const modulesQuery = (profile.role === 'profesor' || profile.role === 'administrador')
+      ? query(collection(db, 'modules'))
+      : query(collection(db, 'modules'), where('visible', '==', true));
+    
+    const unsubscribeModules = onSnapshot(modulesQuery, (snapshot) => {
+      const fetchedModules = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as ClassModule));
+      // Sort in memory to handle modules without 'order' field or with NaN
+      fetchedModules.sort((a, b) => {
+        const orderA = typeof a.order === 'number' && !isNaN(a.order) ? a.order : 0;
+        const orderB = typeof b.order === 'number' && !isNaN(b.order) ? b.order : 0;
+        if (orderA !== orderB) return orderA - orderB;
+        return a.id.localeCompare(b.id);
+      });
+      setModules(fetchedModules);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'modules'));
+
+    // Forum
+    const forumQuery = query(collection(db, 'forum'), orderBy('date', 'desc'));
+    const unsubscribeForum = onSnapshot(forumQuery, (snapshot) => {
+      setForum(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as ForumPost)));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'forum'));
+
+    // Tasks
+    const tasksQuery = query(collection(db, 'tasks'), orderBy('order', 'asc'));
+    const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
+      const fetchedTasks = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Task));
+      fetchedTasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      setTasks(fetchedTasks);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'tasks'));
+
+    // Submissions
+    if (profile.role === 'profesor' || profile.role === 'administrador') {
+      const subQuery = query(collection(db, 'submissions'), orderBy('date', 'desc'));
+      const unsubscribeSub = onSnapshot(subQuery, (snapshot) => {
+        setSubmissions(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Submission)));
+      }, (error) => handleFirestoreError(error, OperationType.LIST, 'submissions'));
+
+      // Pending Users for Admin
+      const pendingQuery = query(collection(db, 'users'), where('status', '==', 'pending'));
+      const unsubscribePending = onSnapshot(pendingQuery, (snapshot) => {
+        setPendingUsers(snapshot.docs.map(doc => doc.data() as UserProfile));
+      }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
+
+      // All Users for Admin Role Management
+      const allUsersQuery = query(collection(db, 'users'), orderBy('displayName', 'asc'));
+      const unsubscribeAllUsers = onSnapshot(allUsersQuery, (snapshot) => {
+        setAllUsers(snapshot.docs.map(doc => doc.data() as UserProfile));
+      }, (error) => handleFirestoreError(error, OperationType.LIST, 'users'));
+
+      // Survey Responses for Admin
+      const surveyQuery = query(collection(db, 'survey_responses'), orderBy('timestamp', 'desc'));
+      const unsubscribeSurvey = onSnapshot(surveyQuery, (snapshot) => {
+        setSurveyResponses(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as SurveyResponse)));
+      }, (error) => handleFirestoreError(error, OperationType.LIST, 'survey_responses'));
+
+      return () => {
+        unsubscribeModules();
+        unsubscribeForum();
+        unsubscribeTasks();
+        unsubscribeSub();
+        unsubscribePending();
+        unsubscribeAllUsers();
+        unsubscribeSurvey();
+      };
+    } else {
+      const subQuery = query(collection(db, 'submissions'), where('studentUid', '==', profile.uid));
+      const unsubscribeSub = onSnapshot(subQuery, (snapshot) => {
+        setSubmissions(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Submission)));
+      }, (error) => handleFirestoreError(error, OperationType.LIST, 'submissions'));
+
+      return () => {
+        unsubscribeModules();
+        unsubscribeForum();
+        unsubscribeTasks();
+        unsubscribeSub();
+      };
+    }
+  }, [profile]);
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login error:", error);
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+  };
+
+  const handleSurveyComplete = async (responses: any) => {
+    if (!profile) return;
+    
+    // Silent tagging logic
+    const hasAdvancedTools = responses.tools.some((t: string) => surveyConfig.advancedTools.includes(t));
+    
+    const isAdvanced = (responses.frequency === surveyConfig.advancedThresholdFrequency && 
+                        responses.technical_validation === surveyConfig.advancedThresholdTechnical) || 
+                       hasAdvancedTools;
+    const suggested_level = isAdvanced ? 'Avanzado' as const : 'Principiante' as const;
+
+    try {
+      // 1. Save response
+      const responseId = `${profile.uid}_${Date.now()}`;
+      const surveyData: SurveyResponse = {
+        id: responseId,
+        editionId: selectedEditionId,
+        user_id: profile.uid,
+        user_name: profile.displayName,
+        ...responses,
+        timestamp: new Date().toISOString(),
+        suggested_level
+      };
+      await setDoc(doc(db, 'survey_responses', responseId), surveyData);
+
+      // 2. Update user profile
+      const updatedProfile = { 
+        ...profile, 
+        survey_completed: true, 
+        suggested_level 
+      };
+      await updateDoc(doc(db, 'users', profile.uid), { 
+        survey_completed: true, 
+        suggested_level 
+      });
+      
+      setProfile(updatedProfile);
+      setNotification({ message: '¡Gracias por completar la encuesta!', type: 'success' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'survey_responses');
+    }
+  };
+
+  const handleDownloadSurveyCSV = () => {
+    if (surveyResponses.length === 0) return;
+
+    const baseHeaders = ['Nombre', 'Email', 'Familiaridad', 'Herramientas', 'Frecuencia', 'Perfil Profesional', 'Objetivo Automatización', 'Validación Técnica', 'Nivel Sugerido', 'Fecha'];
+    const customQuestionsArr = surveyConfig.customQuestions || [];
+    const headers = [...baseHeaders, ...customQuestionsArr.map(q => q.text)];
+
+    const rows = surveyResponses.map(r => {
+      const user = allUsers.find(u => u.uid === r.user_id);
+      const baseData = [
+        r.user_name,
+        user?.email || '',
+        r.familiarity,
+        `"${r.tools.join(', ')}"`,
+        r.frequency,
+        `"${r.professional_profile.replace(/"/g, '""')}"`,
+        `"${r.automation_goal.replace(/"/g, '""')}"`,
+        r.technical_validation,
+        r.suggested_level,
+        new Date(r.timestamp).toLocaleString()
+      ];
+
+      const customData = customQuestionsArr.map(q => {
+        const resp = r.custom_responses?.[q.id] || '';
+        return `"${resp.replace(/"/g, '""')}"`;
+      });
+
+      return [...baseData, ...customData];
+    });
+
+    const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `encuestas_ia_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Edition Handlers
+  const handleCreateEdition = async (editionData: {
+    name: string;
+    description: string;
+    startDate?: string;
+    endDate?: string;
+    status: 'activa' | 'archivada' | 'planificada';
+    cloneContentFrom?: string;
+  }) => {
+    if (!editionData.name.trim() || !profile) return;
+    try {
+      const newEditionId = `edicion-${Date.now()}`;
+      const willBeActive = editionData.status === 'activa';
+
+      // If active, archive other editions
+      if (willBeActive) {
+        for (const ed of editions) {
+          if (ed.isActive) {
+            await updateDoc(doc(db, 'editions', ed.id), { isActive: false, status: 'archivada' });
+          }
+        }
+      }
+
+      const newEdition: Edition = {
+        id: newEditionId,
+        name: editionData.name.trim(),
+        description: editionData.description.trim(),
+        startDate: editionData.startDate,
+        endDate: editionData.endDate,
+        isActive: willBeActive,
+        status: editionData.status,
+        createdAt: new Date().toISOString(),
+        createdOrder: editions.length + 1
+      };
+
+      await setDoc(doc(db, 'editions', newEditionId), newEdition);
+
+      // Clone modules and tasks from source edition if requested
+      if (editionData.cloneContentFrom) {
+        const sourceModFilter = (m: ClassModule) => m.editionId ? m.editionId === editionData.cloneContentFrom : editionData.cloneContentFrom === DEFAULT_EDITION_ID;
+        const sourceTaskFilter = (t: Task) => t.editionId ? t.editionId === editionData.cloneContentFrom : editionData.cloneContentFrom === DEFAULT_EDITION_ID;
+
+        const sourceModules = modules.filter(sourceModFilter);
+        const sourceTasks = tasks.filter(sourceTaskFilter);
+
+        for (let i = 0; i < sourceModules.length; i++) {
+          const mod = sourceModules[i];
+          const clonedModId = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+          const clonedModule: ClassModule = {
+            ...mod,
+            id: clonedModId,
+            editionId: newEditionId,
+            order: (typeof mod.order === 'number' && !isNaN(mod.order)) ? mod.order : (i + 1)
+          };
+          await setDoc(doc(db, 'modules', clonedModId), clonedModule);
+        }
+
+        for (let i = 0; i < sourceTasks.length; i++) {
+          const task = sourceTasks[i];
+          const clonedTaskId = `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+          const clonedTask: Task = {
+            ...task,
+            id: clonedTaskId,
+            editionId: newEditionId,
+            order: (typeof task.order === 'number' && !isNaN(task.order)) ? task.order : (i + 1)
+          };
+          await setDoc(doc(db, 'tasks', clonedTaskId), clonedTask);
+        }
+      }
+
+      setSelectedEditionId(newEditionId);
+      setNotification({
+        message: `Edición "${newEdition.name}" creada con éxito${editionData.cloneContentFrom ? ' con contenidos clonados' : ''}.`,
+        type: 'success'
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'editions');
+    }
+  };
+
+  const handleUpdateEdition = async (edition: Edition) => {
+    if (!profile) return;
+    try {
+      await updateDoc(doc(db, 'editions', edition.id), {
+        name: edition.name,
+        description: edition.description || '',
+        startDate: edition.startDate || '',
+        endDate: edition.endDate || '',
+        status: edition.status
+      });
+      setNotification({ message: `Edición "${edition.name}" actualizada con éxito.`, type: 'success' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `editions/${edition.id}`);
+    }
+  };
+
+  const handleSetActiveEdition = async (editionId: string) => {
+    if (!profile || (profile.role !== 'profesor' && profile.role !== 'administrador')) return;
+    try {
+      for (const ed of editions) {
+        if (ed.id === editionId) {
+          await updateDoc(doc(db, 'editions', ed.id), { isActive: true, status: 'activa' });
+        } else if (ed.isActive) {
+          await updateDoc(doc(db, 'editions', ed.id), { isActive: false, status: 'archivada' });
+        }
+      }
+      setSelectedEditionId(editionId);
+      setNotification({ message: 'Edición activa actualizada correctamente.', type: 'success' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `editions/${editionId}`);
+    }
+  };
+
+  const handleDeleteEdition = async (editionId: string) => {
+    if (!profile || (profile.role !== 'profesor' && profile.role !== 'administrador')) return;
+    try {
+      await deleteDoc(doc(db, 'editions', editionId));
+      if (selectedEditionId === editionId) {
+        const remaining = editions.filter(e => e.id !== editionId);
+        const active = remaining.find(e => e.isActive) || remaining[0];
+        if (active) setSelectedEditionId(active.id);
+      }
+      setNotification({ message: 'Edición eliminada.', type: 'success' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `editions/${editionId}`);
+    }
+  };
+
+  const handleAssignUserEditions = async (userId: string, enrolledEditions: string[]) => {
+    if (!profile || (profile.role !== 'profesor' && profile.role !== 'administrador')) return;
+    try {
+      await updateDoc(doc(db, 'users', userId), { enrolledEditions });
+      setNotification({ message: 'Inscripción de alumno actualizada.', type: 'success' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${userId}`);
+    }
+  };
+
+  const handleCreateTask = async () => {
+    if (!newTaskTitle.trim() || !profile) return;
+    try {
+      const newTaskId = Date.now().toString();
+      const currentTasksForEdition = tasks.filter(t => t.editionId ? t.editionId === selectedEditionId : selectedEditionId === DEFAULT_EDITION_ID);
+      const newTask: Task = {
+        id: newTaskId,
+        editionId: selectedEditionId,
+        order: currentTasksForEdition.length > 0 ? Math.max(...currentTasksForEdition.map(t => t.order ?? 0)) + 1 : 1,
+        title: newTaskTitle,
+        description: newTaskDescription,
+        deadline: newTaskDeadline || new Date().toISOString(),
+        attachmentUrl: newTaskAttachmentUrl
+      };
+      await setDoc(doc(db, 'tasks', newTaskId), newTask);
+      const formattedDate = new Date(newTask.deadline).toLocaleDateString(undefined, { timeZone: 'UTC' });
+      setShowNewTaskModal(false);
+      setNewTaskTitle('');
+      setNewTaskDescription('');
+      setNewTaskDeadline('');
+      setNewTaskAttachmentUrl('');
+      setNotification({ 
+        message: `Tarea "${newTask.title}" creada con éxito. Límite: ${formattedDate}`, 
+        type: 'success' 
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'tasks');
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    setConfirmModal({
+      show: true,
+      title: "Eliminar Tarea",
+      message: "¿Estás seguro de que deseas eliminar esta tarea?",
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'tasks', taskId));
+          setNotification({ message: "Tarea eliminada", type: 'success' });
+        } catch (error) {
+          handleFirestoreError(error, OperationType.DELETE, `tasks/${taskId}`);
+        }
+        setConfirmModal(prev => ({ ...prev, show: false }));
+      }
+    });
+  };
+
+  const handleUpdateTask = async () => {
+    if (!editingTask || !editTaskData) return;
+    try {
+      await updateDoc(doc(db, 'tasks', editingTask), editTaskData);
+      const formattedDate = new Date(editTaskData.deadline).toLocaleDateString(undefined, { timeZone: 'UTC' });
+      setEditingTask(null);
+      setEditTaskData(null);
+      setNotification({ 
+        message: `Tarea "${editTaskData.title}" actualizada con éxito. Nuevo límite: ${formattedDate}`, 
+        type: 'success' 
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `tasks/${editingTask}`);
+    }
+  };
+
+  const handleMoveTask = async (taskId: string, direction: 'up' | 'down') => {
+    const currentIndex = currentTasks.findIndex(t => t.id === taskId);
+    if (currentIndex === -1) return;
+    
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= currentTasks.length) return;
+
+    const currentTask = currentTasks[currentIndex];
+    const targetTask = currentTasks[targetIndex];
+
+    const currentOrder = currentTask.order ?? (currentIndex + 1);
+    const targetOrder = targetTask.order ?? (targetIndex + 1);
+
+    let finalTargetOrder = targetOrder;
+    let finalCurrentOrder = currentOrder;
+
+    if (finalTargetOrder === finalCurrentOrder) {
+      if (direction === 'up') {
+        finalTargetOrder = finalCurrentOrder - 1;
+      } else {
+        finalTargetOrder = finalCurrentOrder + 1;
+      }
+    }
+
+    try {
+      await updateDoc(doc(db, 'tasks', currentTask.id), { order: finalTargetOrder });
+      await updateDoc(doc(db, 'tasks', targetTask.id), { order: finalCurrentOrder });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `tasks/${taskId}`);
+    }
+  };
+  const handleCreateModule = async () => {
+    if (!newModuleTitle.trim() || !profile) return;
+    try {
+      const newModuleId = Date.now().toString();
+      const currentModsForEdition = modules.filter(m => m.editionId ? m.editionId === selectedEditionId : selectedEditionId === DEFAULT_EDITION_ID);
+      const newModule: ClassModule = {
+        id: newModuleId,
+        editionId: selectedEditionId,
+        order: currentModsForEdition.length > 0 ? Math.max(...currentModsForEdition.map(m => typeof m.order === 'number' ? m.order : 0)) + 1 : 1,
+        title: newModuleTitle,
+        description: newModuleDescription,
+        materials: [],
+        extra: [],
+        task: null,
+        visible: true
+      };
+      await setDoc(doc(db, 'modules', newModuleId), newModule);
+      setShowNewModuleModal(false);
+      setNewModuleTitle('');
+      setNewModuleDescription('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'modules');
+    }
+  };
+
+  const handlePostForum = async () => {
+    if (!newPost.trim() || !profile) return;
+    try {
+      await addDoc(collection(db, 'forum'), {
+        user: profile.displayName,
+        text: newPost,
+        date: new Date().toISOString(),
+        uid: profile.uid,
+        editionId: selectedEditionId,
+        replies: []
+      });
+      setNewPost('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'forum');
+    }
+  };
+
+  const handleReplyForum = async (postId: string) => {
+    if (!replyText.trim() || !profile) return;
+    try {
+      const postRef = doc(db, 'forum', postId);
+      const postSnap = await getDoc(postRef);
+      if (postSnap.exists()) {
+        const postData = postSnap.data() as ForumPost;
+        const newReply = {
+          id: Date.now().toString(),
+          user: profile.displayName,
+          text: replyText,
+          date: new Date().toISOString(),
+          uid: profile.uid
+        };
+        await updateDoc(postRef, {
+          replies: [...(postData.replies || []), newReply]
+        });
+        setReplyText('');
+        setReplyingTo(null);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `forum/${postId}`);
+    }
+  };
+
+  const handleDeleteForumPost = async (postId: string) => {
+    if (!profile || (profile.role !== 'profesor' && profile.role !== 'administrador')) return;
+    setConfirmModal({
+      show: true,
+      title: "Eliminar Consulta",
+      message: "¿Estás seguro de que quieres eliminar esta consulta?",
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'forum', postId));
+          setNotification({ message: "Consulta eliminada", type: 'success' });
+        } catch (error) {
+          handleFirestoreError(error, OperationType.DELETE, `forum/${postId}`);
+        }
+        setConfirmModal(prev => ({ ...prev, show: false }));
+      }
+    });
+  };
+
+  const handleDeleteForumReply = async (postId: string, replyId: string) => {
+    if (!profile || (profile.role !== 'profesor' && profile.role !== 'administrador')) return;
+    setConfirmModal({
+      show: true,
+      title: "Eliminar Respuesta",
+      message: "¿Estás seguro de que quieres eliminar esta respuesta?",
+      onConfirm: async () => {
+        try {
+          const postRef = doc(db, 'forum', postId);
+          const postSnap = await getDoc(postRef);
+          if (postSnap.exists()) {
+            const postData = postSnap.data() as ForumPost;
+            const updatedReplies = (postData.replies || []).filter(r => r.id !== replyId);
+            await updateDoc(postRef, { replies: updatedReplies });
+            setNotification({ message: "Respuesta eliminada", type: 'success' });
+          }
+        } catch (error) {
+          handleFirestoreError(error, OperationType.UPDATE, `forum/${postId}`);
+        }
+        setConfirmModal(prev => ({ ...prev, show: false }));
+      }
+    });
+  };
+
+  const handleLinkSubmission = async (taskId: string, taskTitle: string) => {
+    if (!profile || !submissionUrl[taskId]?.trim()) return;
+    
+    if (!taskId) {
+      setNotification({ message: "Error: Esta tarea no tiene un identificador válido. Por favor, contacta al profesor.", type: 'error' });
+      return;
+    }
+    const url = submissionUrl[taskId].trim();
+    if (!url.startsWith('http')) {
+      setNotification({ message: "Por favor, ingresa una URL válida (ej: https://drive.google.com/...)", type: 'error' });
+      return;
+    }
+
+    setUploading(`submission-${taskId}`);
+    
+    try {
+      await addDoc(collection(db, 'submissions'), {
+        studentName: profile.displayName,
+        studentUid: profile.uid,
+        taskId,
+        taskTitle,
+        editionId: selectedEditionId,
+        fileName: "Enlace Externo",
+        fileUrl: url,
+        studentComment: submissionComment[taskId] || "",
+        date: new Date().toISOString(),
+        status: 'Recibido'
+      });
+      setNotification({ message: "¡Enlace de tarea entregado con éxito!", type: 'success' });
+      setSubmissionUrl(prev => ({ ...prev, [taskId]: '' }));
+      setSubmissionComment(prev => ({ ...prev, [taskId]: '' }));
+    } catch (error: any) {
+      console.error("Submission error:", error);
+      setNotification({ message: "Error al entregar la tarea.", type: 'error' });
+      handleFirestoreError(error, OperationType.CREATE, 'submissions');
+    } finally {
+      setUploading(null);
+    }
+  };
+
+  const handleToggleVisibility = async (id: string, current: boolean) => {
+    try {
+      await updateDoc(doc(db, 'modules', id), { visible: !current });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `modules/${id}`);
+    }
+  };
+
+  const handleUpdateNotebookUrl = async (id: string, url: string) => {
+    try {
+      await updateDoc(doc(db, 'modules', id), { notebookLMUrl: url });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `modules/${id}`);
+    }
+  };
+
+  const handleMoveModule = async (moduleId: string, direction: 'up' | 'down') => {
+    const currentIndex = currentModules.findIndex(m => m.id === moduleId);
+    if (currentIndex === -1) return;
+    
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= currentModules.length) return;
+
+    const currentModule = currentModules[currentIndex];
+    const targetModule = currentModules[targetIndex];
+
+    // Ensure we have valid numbers for order
+    const currentOrder = typeof currentModule.order === 'number' && !isNaN(currentModule.order) 
+      ? currentModule.order 
+      : (currentIndex + 1);
+    const targetOrder = typeof targetModule.order === 'number' && !isNaN(targetModule.order) 
+      ? targetModule.order 
+      : (targetIndex + 1);
+
+    // If orders are the same, we must force a difference to allow swapping
+    let finalTargetOrder = targetOrder;
+    let finalCurrentOrder = currentOrder;
+
+    if (finalTargetOrder === finalCurrentOrder) {
+      if (direction === 'up') {
+        finalTargetOrder = finalCurrentOrder - 1;
+      } else {
+        finalTargetOrder = finalCurrentOrder + 1;
+      }
+    }
+
+    try {
+      await updateDoc(doc(db, 'modules', currentModule.id), { order: finalTargetOrder });
+      await updateDoc(doc(db, 'modules', targetModule.id), { order: finalCurrentOrder });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `modules/${moduleId}`);
+    }
+  };
+
+  const handleGradeSubmission = async (submissionId: string) => {
+    try {
+      await updateDoc(doc(db, 'submissions', submissionId), { 
+        status: 'Calificado',
+        teacherFeedback: feedbackText 
+      });
+      setNotification({ message: "Tarea marcada como calificada", type: 'success' });
+      setGradingSubmission(null);
+      setFeedbackText('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `submissions/${submissionId}`);
+    }
+  };
+
+  const handleUpdateFeedback = async (submissionId: string) => {
+    try {
+      await updateDoc(doc(db, 'submissions', submissionId), { 
+        teacherFeedback: feedbackText 
+      });
+      setNotification({ message: "Comentario guardado", type: 'success' });
+      setGradingSubmission(null);
+      setFeedbackText('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `submissions/${submissionId}`);
+    }
+  };
+
+  const handleDeleteSubmission = async (submissionId: string) => {
+    setConfirmModal({
+      show: true,
+      title: "Eliminar Entrega",
+      message: "¿Estás seguro de que deseas eliminar esta entrega?",
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'submissions', submissionId));
+          setNotification({ message: "Entrega eliminada", type: 'success' });
+        } catch (error) {
+          handleFirestoreError(error, OperationType.DELETE, `submissions/${submissionId}`);
+        }
+        setConfirmModal(prev => ({ ...prev, show: false }));
+      }
+    });
+  };
+
+  const startEditingModule = (mod: any) => {
+    setEditingModule(mod.id);
+    setEditModuleData({ ...mod });
+  };
+
+  const cancelEditingModule = () => {
+    setEditingModule(null);
+    setEditModuleData(null);
+  };
+
+  const saveModuleChanges = async () => {
+    if (!editModuleData || !editingModule) return;
+    try {
+      const { id, ...dataToUpdate } = editModuleData;
+      await updateDoc(doc(db, 'modules', editingModule), dataToUpdate);
+      setEditingModule(null);
+      setEditModuleData(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `modules/${editingModule}`);
+    }
+  };
+
+  const addMaterial = (type: 'materials' | 'extra') => {
+    if (!editModuleData) return;
+    const newItem = type === 'materials' 
+      ? { title: 'Nuevo Material', url: '', type: 'pdf' }
+      : { title: 'Nuevo Enlace', url: '' };
+    
+    setEditModuleData({
+      ...editModuleData,
+      [type]: [...(editModuleData[type] || []), newItem]
+    });
+  };
+
+  const updateMaterial = (type: 'materials' | 'extra', index: number, field: string, value: any) => {
+    if (!editModuleData) return;
+    const newList = [...(editModuleData[type] || [])];
+    newList[index] = { ...newList[index], [field]: value };
+    setEditModuleData({ ...editModuleData, [type]: newList });
+  };
+
+  const removeMaterial = (type: 'materials' | 'extra', index: number) => {
+    if (!editModuleData) return;
+    const newList = [...(editModuleData[type] || [])];
+    newList.splice(index, 1);
+    setEditModuleData({ ...editModuleData, [type]: newList });
+  };
+
+  const updateTask = (field: string, value: any) => {
+    if (!editModuleData) return;
+    setEditModuleData({
+      ...editModuleData,
+      task: { ...(editModuleData.task || { id: Date.now().toString(), title: '', description: '', deadline: new Date().toISOString() }), [field]: value }
+    });
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'materials' | 'extra', index: number) => {
+    const file = e.target.files?.[0];
+    if (!file || !editModuleData || !editingModule) return;
+
+    // Size limit: 10MB
+    if (file.size > 10 * 1024 * 1024) {
+      setNotification({ message: "El archivo es demasiado grande (máximo 10MB)", type: 'error' });
+      return;
+    }
+
+    const uploadId = `${editingModule}-${type}-${index}`;
+    setUploading(uploadId);
+    setUploadProgress(prev => ({ ...prev, [uploadId]: 50 }));
+    console.log(`Iniciando subida simple: ${file.name}`);
+
+    try {
+      const storageRef = ref(storage, `modules/${editingModule}/${type}/${Date.now()}_${file.name}`);
+      const snapshot = await uploadBytes(storageRef, file);
+      const url = await getDownloadURL(snapshot.ref);
+      
+      updateMaterial(type, index, 'url', url);
+      
+      if (!editModuleData[type][index].title || editModuleData[type][index].title.startsWith('Nuevo')) {
+        updateMaterial(type, index, 'title', file.name);
+      }
+      
+      if (type === 'materials') {
+        const isVideo = file.type.startsWith('video/');
+        updateMaterial(type, index, 'type', isVideo ? 'video' : 'pdf');
+      }
+      
+      setNotification({ message: "Archivo subido con éxito", type: 'success' });
+    } catch (error: any) {
+      console.error("Upload error:", error);
+      let message = "Error al subir. ";
+      if (error.code === 'storage/unauthorized') message += "Revisa las reglas de Storage.";
+      else if (error.code === 'storage/project-not-found') message += "Storage no activado.";
+      else message += error.message;
+      setNotification({ message, type: 'error' });
+    } finally {
+      setUploading(null);
+      setUploadProgress(prev => {
+        const next = { ...prev };
+        delete next[uploadId];
+        return next;
+      });
+    }
+  };
+
+  const handleApproveUser = async (uid: string) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { status: 'approved' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${uid}`);
+    }
+  };
+
+  const handleUpdateUserRole = async (uid: string, role: UserRole) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { role });
+      setNotification({ message: `Rol actualizado a ${role}`, type: 'success' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${uid}`);
+    }
+  };
+
+  const handleUpdateUserFeedback = async (uid: string) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { 
+        teacherFeedback: userFeedbackText 
+      });
+      setNotification({ message: "Observaciones actualizadas", type: 'success' });
+      setGradingUserProfile(null);
+      setUserFeedbackText('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${uid}`);
+    }
+  };
+
+  const handleDeleteUser = async (uid: string) => {
+    setConfirmModal({
+      show: true,
+      title: 'Eliminar Usuario',
+      message: '¿Estás seguro de que deseas eliminar este usuario? Esta acción no se puede deshacer.',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'users', uid));
+          setConfirmModal(prev => ({ ...prev, show: false }));
+          setNotification({ message: 'Usuario eliminado correctamente', type: 'success' });
+        } catch (error) {
+          handleFirestoreError(error, OperationType.DELETE, `users/${uid}`);
+        }
+      }
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-brand-gray">
+        <div className="flex flex-col items-center gap-6">
+          <BrandLogo className="animate-pulse" />
+          <Loader2 className="text-brand-red animate-spin" size={32} />
+        </div>
+      </div>
+    );
+  }
+
+  if (!user || !profile) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-brand-gray p-4 relative overflow-hidden">
+        {/* Decorative Background Elements */}
+        <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] opacity-5 pointer-events-none">
+          <svg viewBox="0 0 100 100" className="w-full h-full text-brand-red fill-current">
+            <path d="M10,10 L90,90 M90,10 L10,90" stroke="currentColor" strokeWidth="20" />
+          </svg>
+        </div>
+        <div className="absolute bottom-[-10%] left-[-10%] w-[30%] h-[30%] opacity-5 pointer-events-none">
+          <svg viewBox="0 0 100 100" className="w-full h-full text-brand-dark fill-current">
+            <circle cx="50" cy="50" r="40" stroke="currentColor" strokeWidth="15" fill="none" />
+          </svg>
+        </div>
+
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white p-12 rounded-[48px] shadow-2xl w-full max-w-md border-b-8 border-brand-red relative z-10"
+        >
+          <div className="text-center mb-10">
+            <BrandLogo className="justify-center mb-8" />
+            <h1 className="text-3xl font-black text-brand-dark tracking-tighter">Plataforma IA</h1>
+            <p className="text-slate-500 mt-2 font-bold uppercase text-[10px] tracking-[0.2em]">Comunidad Educativa Crucianelli</p>
+          </div>
+          <div className="space-y-4">
+            <button 
+              onClick={handleLogin}
+              className="w-full p-5 bg-brand-red text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-brand-red/90 transition-all shadow-xl shadow-brand-red/20 flex items-center justify-center gap-3 active:scale-95"
+            >
+              <Users size={18} /> Acceder con Google
+            </button>
+            <p className="text-center text-[9px] text-slate-400 px-4 uppercase tracking-[0.15em] font-black leading-relaxed">
+              Acceso exclusivo para la red educativa de la Fundación
+            </p>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (profile.status === 'pending') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-brand-gray p-4">
+        <div className="bg-white p-12 rounded-[48px] shadow-2xl w-full max-w-md text-center border-b-8 border-amber-500 relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full -mr-16 -mt-16 blur-2xl" />
+          <Clock className="mx-auto text-amber-500 mb-8" size={64} />
+          <h2 className="text-2xl font-black text-brand-dark mb-3 tracking-tighter">Registro Pendiente</h2>
+          <p className="text-slate-500 text-sm font-medium leading-relaxed mb-8">
+            Hola <strong className="text-brand-dark">{profile.displayName}</strong>, tu solicitud ha sido enviada. El equipo de la Fundación debe aprobar tu acceso antes de que puedas ver el contenido.
+          </p>
+          <button 
+            onClick={handleLogout}
+            className="w-full py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
+          >
+            <LogOut size={18} /> Cerrar Sesión
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (profile.role === 'alumno' && !profile.survey_completed) {
+    return <SurveyView profile={profile} config={surveyConfig} onComplete={handleSurveyComplete} onLogout={handleLogout} />;
+  }
+
+  // Current edition info & access control
+  const activeEdition = editions.find(e => e.isActive) || editions[0];
+  const currentSelectedEdition = editions.find(e => e.id === selectedEditionId) || activeEdition;
+  const isSelectedEditionArchived = currentSelectedEdition?.status === 'archivada';
+  const isDefaultEditionSelected = selectedEditionId === DEFAULT_EDITION_ID || !selectedEditionId;
+
+  // Filtered lists for the active/selected edition
+  const currentModules = modules.filter(m => 
+    m.editionId ? m.editionId === selectedEditionId : isDefaultEditionSelected
+  );
+
+  const currentTasks = tasks.filter(t => 
+    t.editionId ? t.editionId === selectedEditionId : isDefaultEditionSelected
+  );
+
+  const currentForum = forum.filter(p => 
+    p.editionId ? p.editionId === selectedEditionId : isDefaultEditionSelected
+  );
+
+  const currentSubmissions = submissions.filter(s => 
+    s.editionId ? s.editionId === selectedEditionId : isDefaultEditionSelected
+  );
+
+  return (
+    <div className="min-h-screen flex flex-col md:flex-row bg-brand-gray">
+      {/* Notifications */}
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -50, x: '-50%' }}
+            animate={{ opacity: 1, y: 20, x: '-50%' }}
+            exit={{ opacity: 0, y: -50, x: '-50%' }}
+            className={`fixed top-0 left-1/2 z-[100] px-6 py-3 rounded-full shadow-lg flex items-center gap-3 text-sm font-bold ${
+              notification.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+            }`}
+          >
+            {notification.type === 'success' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
+            {notification.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Sidebar */}
+      <aside className="w-full md:w-72 bg-brand-dark text-white p-8 flex flex-col shadow-2xl z-20 relative overflow-hidden">
+        {/* Sidebar Background Accent */}
+        <div className="absolute top-0 right-0 w-32 h-32 bg-brand-red/10 rounded-full -mr-16 -mt-16 blur-2xl" />
+        
+        <div className="flex items-center justify-between mb-12 relative z-10 w-full px-1 gap-4">
+          <div className="flex items-center gap-8">
+            <BrandLogo variant="cec" light className="shrink-0" />
+            <div className="h-12 w-px bg-white/20 shrink-0" />
+          </div>
+          <div className="flex flex-col leading-none text-right shrink-0">
+            <span className="font-black text-2xl tracking-tighter text-white">CURSO IA</span>
+            <span className="text-sm font-bold text-brand-red tracking-widest">2026</span>
+          </div>
+        </div>
+        
+        <nav className="flex-1 space-y-2">
+          <button 
+            onClick={() => setActiveTab('clases')}
+            className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all duration-200 ${activeTab === 'clases' ? 'bg-brand-red text-white shadow-lg shadow-brand-red/20' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}
+          >
+            <BookOpen size={18} /> Clases
+          </button>
+          <button 
+            onClick={() => setActiveTab('foro')}
+            className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all duration-200 ${activeTab === 'foro' ? 'bg-brand-red text-white shadow-lg shadow-brand-red/20' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}
+          >
+            <MessageSquare size={18} /> Foro
+          </button>
+          <button 
+            onClick={() => setActiveTab('tareas')}
+            className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all duration-200 ${activeTab === 'tareas' ? 'bg-brand-red text-white shadow-lg shadow-brand-red/20' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}
+          >
+            <FileText size={18} /> Tareas
+          </button>
+          {(profile.role === 'profesor' || profile.role === 'administrador') && (
+            <button 
+              onClick={() => setActiveTab('admin')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all duration-200 ${activeTab === 'admin' ? 'bg-brand-red text-white shadow-lg shadow-brand-red/20' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}
+            >
+              <ShieldCheck size={18} /> Usuarios
+            </button>
+          )}
+          {(profile.role === 'profesor' || profile.role === 'administrador') && (
+            <button 
+              onClick={() => setActiveTab('ediciones')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all duration-200 ${activeTab === 'ediciones' ? 'bg-brand-red text-white shadow-lg shadow-brand-red/20' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}
+            >
+              <Layers size={18} /> Ediciones
+            </button>
+          )}
+        </nav>
+
+        <div className="mt-auto pt-6 border-t border-white/5">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs uppercase">
+              {profile.displayName[0]}
+            </div>
+            <div className="text-sm">
+              <p className="font-medium capitalize">{profile.displayName}</p>
+              <p className="text-slate-500 text-xs">{profile.role}</p>
+            </div>
+          </div>
+          <button 
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 p-2 text-slate-400 hover:text-white transition-colors text-sm"
+          >
+            <LogOut size={16} /> Cerrar Sesión
+          </button>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="flex-1 p-4 md:p-10 overflow-y-auto bg-brand-gray relative">
+        {/* Main Content Background Accents */}
+        <div className="absolute top-0 right-0 w-96 h-96 bg-brand-red/5 rounded-full -mr-48 -mt-48 blur-3xl pointer-events-none" />
+        
+        <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+          <div>
+            <h2 className="text-3xl md:text-4xl font-black text-brand-dark tracking-tighter">
+              {activeTab === 'clases' ? 'Módulos del Curso' : 
+               activeTab === 'foro' ? 'Foro de Consultas' : 
+               activeTab === 'tareas' ? 'Gestión de Tareas' : 
+               activeTab === 'admin' ? 'Administración de Usuarios' : 
+               'Ediciones y Cohortes'}
+            </h2>
+            <div className="w-12 h-1.5 bg-brand-red rounded-full mt-2" />
+          </div>
+
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Edition Selector Dropdown / Badge */}
+            <EditionSelector
+              editions={editions}
+              selectedEditionId={selectedEditionId}
+              onSelectEdition={setSelectedEditionId}
+              profile={profile}
+              onOpenManageEditions={() => setActiveTab('ediciones')}
+            />
+
+            {(profile.role === 'profesor' || profile.role === 'administrador') && (activeTab === 'clases' || activeTab === 'tareas') && (
+              <button 
+                onClick={() => activeTab === 'clases' ? setShowNewModuleModal(true) : setShowNewTaskModal(true)}
+                className="bg-brand-red text-white px-5 py-2.5 rounded-2xl flex items-center gap-2 hover:bg-brand-red/90 transition-all shadow-lg shadow-brand-red/20 text-xs font-black uppercase tracking-wider active:scale-95"
+              >
+                <Plus size={16} /> {activeTab === 'clases' ? 'Nueva Clase' : 'Nueva Tarea'}
+              </button>
+            )}
+          </div>
+        </header>
+
+        {isSelectedEditionArchived && (
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-8 p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-amber-500/20 text-amber-700 shrink-0">
+                <Archive size={20} />
+              </div>
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-amber-900">
+                  Modo Histórico &bull; Edición Archivada ({currentSelectedEdition?.name})
+                </p>
+                <p className="text-xs text-amber-700">
+                  Estás explorando el registro histórico de contenidos, consultas y entregas correspondientes a esta cohorte.
+                </p>
+              </div>
+            </div>
+            {editions.some(e => e.isActive) && (
+              <button
+                onClick={() => {
+                  const act = editions.find(e => e.isActive);
+                  if (act) setSelectedEditionId(act.id);
+                }}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-all shrink-0 self-start sm:self-auto shadow-sm"
+              >
+                Ir a la Edición Activa
+              </button>
+            )}
+          </motion.div>
+        )}
+
+        <AnimatePresence>
+          {showNewModuleModal && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl"
+              >
+                <h3 className="text-xl font-bold text-slate-800 mb-4">Crear Nueva Clase</h3>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Título</label>
+                    <input 
+                      type="text" 
+                      value={newModuleTitle}
+                      onChange={(e) => setNewModuleTitle(e.target.value)}
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                      placeholder="Ej: Introducción a LLMs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Descripción</label>
+                    <textarea 
+                      value={newModuleDescription}
+                      onChange={(e) => setNewModuleDescription(e.target.value)}
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none h-32 resize-none"
+                      placeholder="Describe brevemente el contenido de esta clase..."
+                    />
+                  </div>
+                  <div className="flex gap-3 pt-2">
+                    <button 
+                      onClick={() => setShowNewModuleModal(false)}
+                      className="flex-1 p-3 bg-slate-100 text-slate-600 rounded-xl font-semibold hover:bg-slate-200 transition-colors"
+                    >
+                      Cancelar
+                    </button>
+                    <button 
+                      onClick={handleCreateModule}
+                      className="flex-1 p-3 bg-brand-red text-white rounded-xl font-bold hover:bg-brand-red/90 transition-all active:scale-95"
+                    >
+                      Crear Clase
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {activeTab === 'clases' && (
+          <div className="space-y-4 max-w-4xl">
+            {currentModules.map((mod, index) => (
+              <div key={mod.id} className={`bg-white rounded-xl shadow-sm border ${!mod.visible && (profile.role === 'profesor' || profile.role === 'administrador') ? 'border-dashed border-slate-300 opacity-75' : 'border-slate-200'} overflow-hidden`}>
+                <div className="flex items-center">
+                  <button 
+                    type="button"
+                    onClick={() => setExpandedModule(expandedModule === mod.id ? null : mod.id)}
+                    className="flex-1 p-5 flex items-center justify-between hover:bg-slate-50 transition-colors text-left"
+                  >
+                    <div className="flex items-center gap-4">
+                      <span className={`w-8 h-8 ${mod.visible ? 'bg-slate-100 text-slate-500' : 'bg-slate-200 text-slate-400'} rounded-full flex items-center justify-center font-bold text-sm`}>
+                        {index + 1}
+                      </span>
+                      <div className="text-left">
+                        <h3 className="font-semibold text-slate-700">{mod.title}</h3>
+                        {!mod.visible && (profile.role === 'profesor' || profile.role === 'administrador') && <span className="text-[10px] text-amber-600 font-bold uppercase tracking-wider">Oculto para Alumnos</span>}
+                      </div>
+                    </div>
+                    {expandedModule === mod.id ? <ChevronUp size={20} className="text-slate-400" /> : <ChevronDown size={20} className="text-slate-400" />}
+                  </button>
+                  
+                  {(profile.role === 'profesor' || profile.role === 'administrador') && (
+                    <div className="flex border-l border-slate-100">
+                      <div className="flex flex-col border-r border-slate-100">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleMoveModule(mod.id, 'up'); }}
+                          disabled={index === 0}
+                          className="p-2.5 text-slate-400 hover:text-blue-500 disabled:opacity-30 transition-colors"
+                          title="Subir"
+                        >
+                          <ArrowUp size={16} />
+                        </button>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); handleMoveModule(mod.id, 'down'); }}
+                          disabled={index === currentModules.length - 1}
+                          className="p-2.5 border-t border-slate-100 text-slate-400 hover:text-blue-500 disabled:opacity-30 transition-colors"
+                          title="Bajar"
+                        >
+                          <ArrowDown size={16} />
+                        </button>
+                      </div>
+                      <button 
+                        onClick={() => editingModule === mod.id ? cancelEditingModule() : startEditingModule(mod)}
+                        className={`p-5 hover:bg-slate-50 transition-colors ${editingModule === mod.id ? 'text-red-500' : 'text-slate-400'}`}
+                        title="Editar contenido"
+                      >
+                        {editingModule === mod.id ? <X size={20} /> : <Edit size={20} />}
+                      </button>
+                      <button 
+                        onClick={() => handleToggleVisibility(mod.id, mod.visible)}
+                        className={`p-5 border-l border-slate-100 hover:bg-slate-50 transition-colors ${mod.visible ? 'text-brand-red' : 'text-slate-400'}`}
+                        title={mod.visible ? "Ocultar clase" : "Mostrar clase"}
+                      >
+                        {mod.visible ? <Eye size={20} /> : <EyeOff size={20} />}
+                      </button>
+                    </div>
+                  )}
+                </div>
+                
+                <AnimatePresence initial={false}>
+                  {expandedModule === mod.id && (
+                    <motion.div 
+                      key={`content-${mod.id}`}
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.3, ease: "easeInOut" }}
+                      className="border-t border-slate-100 bg-slate-50/50 overflow-hidden"
+                    >
+                      <div className="p-6">
+                        {editingModule === mod.id ? (
+                          <div className="space-y-6">
+                            <div className="grid md:grid-cols-2 gap-4">
+                              <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Título de la Clase</label>
+                                <input 
+                                  type="text" 
+                                  value={editModuleData.title}
+                                  onChange={(e) => setEditModuleData({...editModuleData, title: e.target.value})}
+                                  className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">URL NotebookLM</label>
+                                <input 
+                                  type="text" 
+                                  value={editModuleData.notebookLMUrl || ''}
+                                  onChange={(e) => setEditModuleData({...editModuleData, notebookLMUrl: e.target.value})}
+                                  placeholder="https://notebooklm.google.com/..."
+                                  className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Descripción</label>
+                              <textarea 
+                                value={editModuleData.description}
+                                onChange={(e) => setEditModuleData({...editModuleData, description: e.target.value})}
+                                className="w-full p-2 bg-white border border-slate-200 rounded-lg text-sm h-24 resize-none"
+                              />
+                            </div>
+
+                            <div className="grid md:grid-cols-2 gap-8">
+                              <div>
+                                <div className="flex justify-between items-center mb-4">
+                                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Material de Clase</h4>
+                                  <button onClick={() => addMaterial('materials')} className="text-brand-red hover:text-brand-red/80 p-1"><Plus size={16} /></button>
+                                </div>
+                                <div className="space-y-3">
+                                  {editModuleData.materials?.map((mat: any, idx: number) => (
+                                    <div key={idx} className="p-3 bg-white rounded-lg border border-slate-200 space-y-2">
+                                      <div className="flex gap-2">
+                                        <input 
+                                          type="text" 
+                                          value={mat.title}
+                                          onChange={(e) => updateMaterial('materials', idx, 'title', e.target.value)}
+                                          placeholder="Título"
+                                          className="flex-1 text-xs p-1 border-b border-slate-100 outline-none"
+                                        />
+                                        <button onClick={() => removeMaterial('materials', idx)} className="text-red-400 hover:text-red-500"><Trash2 size={14} /></button>
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <div className="flex-1 relative">
+                                          <input 
+                                            type="text" 
+                                            value={mat.url}
+                                            onChange={(e) => updateMaterial('materials', idx, 'url', e.target.value)}
+                                            placeholder="URL o sube un archivo"
+                                            className="w-full text-[10px] p-1 pr-16 border-b border-slate-100 outline-none font-mono"
+                                          />
+                                          <div className="absolute right-0 top-1/2 -translate-y-1/2 flex gap-1">
+                                            <a 
+                                              href="https://drive.google.com" 
+                                              target="_blank" 
+                                              rel="noreferrer"
+                                              className="text-slate-400 hover:text-amber-500 transition-colors"
+                                              title="Abrir Google Drive"
+                                            >
+                                              <ExternalLink size={14} />
+                                            </a>
+                                          <label className="cursor-pointer text-slate-400 hover:text-blue-500 transition-colors flex items-center gap-1">
+                                            {uploading === `${editingModule}-materials-${idx}` ? (
+                                              <div className="flex items-center gap-1 text-[10px] font-bold text-blue-500">
+                                                <Loader2 size={14} className="animate-spin" />
+                                                {uploadProgress[`${editingModule}-materials-${idx}`] || 0}%
+                                              </div>
+                                            ) : (
+                                              <FileUp size={14} />
+                                            )}
+                                            <input 
+                                              type="file" 
+                                              className="hidden" 
+                                              onChange={(e) => handleFileUpload(e, 'materials', idx)}
+                                            />
+                                          </label>
+                                          </div>
+                                        </div>
+                                        <select 
+                                          value={mat.type}
+                                          onChange={(e) => updateMaterial('materials', idx, 'type', e.target.value)}
+                                          className="text-[10px] bg-slate-50 border-none outline-none"
+                                        >
+                                          <option value="pdf">PDF</option>
+                                          <option value="video">Video</option>
+                                        </select>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div>
+                                <div className="flex justify-between items-center mb-4">
+                                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Material Extra</h4>
+                                  <button onClick={() => addMaterial('extra')} className="text-brand-red hover:text-brand-red/80 p-1"><Plus size={16} /></button>
+                                </div>
+                                <div className="space-y-3">
+                                  {editModuleData.extra?.map((mat: any, idx: number) => (
+                                    <div key={idx} className="p-3 bg-white rounded-lg border border-slate-200 space-y-2">
+                                      <div className="flex gap-2">
+                                        <input 
+                                          type="text" 
+                                          value={mat.title}
+                                          onChange={(e) => updateMaterial('extra', idx, 'title', e.target.value)}
+                                          placeholder="Título"
+                                          className="flex-1 text-xs p-1 border-b border-slate-100 outline-none"
+                                        />
+                                        <button onClick={() => removeMaterial('extra', idx)} className="text-red-400 hover:text-red-500"><Trash2 size={14} /></button>
+                                      </div>
+                                      <div className="relative">
+                                        <input 
+                                          type="text" 
+                                          value={mat.url}
+                                          onChange={(e) => updateMaterial('extra', idx, 'url', e.target.value)}
+                                          placeholder="URL o sube un archivo"
+                                          className="w-full text-[10px] p-1 pr-16 border-b border-slate-100 outline-none font-mono"
+                                        />
+                                        <div className="absolute right-0 top-1/2 -translate-y-1/2 flex gap-1">
+                                          <a 
+                                            href="https://drive.google.com" 
+                                            target="_blank" 
+                                            rel="noreferrer"
+                                            className="text-slate-400 hover:text-amber-500 transition-colors"
+                                            title="Abrir Google Drive"
+                                          >
+                                            <ExternalLink size={14} />
+                                          </a>
+                                        <label className="cursor-pointer text-slate-400 hover:text-blue-500 transition-colors flex items-center gap-1">
+                                          {uploading === `${editingModule}-extra-${idx}` ? (
+                                            <div className="flex items-center gap-1 text-[10px] font-bold text-blue-500">
+                                              <Loader2 size={14} className="animate-spin" />
+                                              {uploadProgress[`${editingModule}-extra-${idx}`] || 0}%
+                                            </div>
+                                          ) : (
+                                            <FileUp size={14} />
+                                          )}
+                                          <input 
+                                            type="file" 
+                                            className="hidden" 
+                                            onChange={(e) => handleFileUpload(e, 'extra', idx)}
+                                          />
+                                        </label>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex gap-3 pt-4">
+                              <button 
+                                onClick={cancelEditingModule}
+                                className="flex-1 py-3 bg-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-300 transition-colors"
+                              >
+                                Cancelar
+                              </button>
+                              <button 
+                                onClick={saveModuleChanges}
+                                className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors"
+                              >
+                                Guardar Cambios
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p className="text-slate-600 mb-6 text-sm leading-relaxed">{mod.description}</p>
+                            
+                            <div className="grid md:grid-cols-2 gap-8">
+                              <div>
+                                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Material de Clase</h4>
+                                <div className="space-y-2">
+                                  {mod.materials?.map((mat, idx) => (
+                                    <a key={idx} href={mat.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 transition-colors group">
+                                      {mat.type === 'pdf' ? <FileIcon size={16} className="text-red-500" /> : <Video size={16} className="text-blue-500" />}
+                                      <span className="text-sm text-slate-600 flex-1">{mat.title}</span>
+                                      <Download size={14} className="text-slate-300 group-hover:text-blue-500" />
+                                    </a>
+                                  ))}
+                                  
+                                  {mod.notebookLMUrl && (
+                                    <a href={mod.notebookLMUrl} target="_blank" rel="noreferrer" className="flex items-center gap-3 p-3 bg-indigo-50 rounded-lg border border-indigo-100 hover:border-indigo-400 transition-colors group">
+                                      <Book size={16} className="text-indigo-600" />
+                                      <span className="text-sm text-indigo-700 font-medium flex-1">Libro NotebookLM</span>
+                                      <LinkIcon size={14} className="text-indigo-300 group-hover:text-indigo-500" />
+                                    </a>
+                                  )}
+
+                                  {(profile.role === 'profesor' || profile.role === 'administrador') && (
+                                    <div className="mt-4 p-3 bg-white rounded-lg border border-slate-200">
+                                      <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">URL NotebookLM</label>
+                                      <div className="flex gap-2">
+                                        <input 
+                                          type="text" 
+                                          defaultValue={mod.notebookLMUrl}
+                                          onBlur={(e) => handleUpdateNotebookUrl(mod.id, e.target.value)}
+                                          placeholder="https://notebooklm.google.com/..."
+                                          className="flex-1 text-xs p-1 border-b border-slate-200 focus:border-blue-500 outline-none"
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                              
+                              <div>
+                                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">Material Extra</h4>
+                                <div className="space-y-2">
+                                  {mod.extra?.map((mat, idx) => (
+                                    <a key={idx} href={mat.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3 bg-white rounded-lg border border-slate-200 hover:border-blue-400 transition-colors group">
+                                      <LinkIcon size={16} className="text-slate-400" />
+                                      <span className="text-sm text-slate-600 flex-1">{mat.title}</span>
+                                      <Download size={14} className="text-slate-300 group-hover:text-blue-500" />
+                                    </a>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="mt-8 pt-6 border-t border-slate-100 flex justify-center">
+                              <button 
+                                onClick={() => setExpandedModule(null)}
+                                className="px-8 py-2 bg-slate-100 text-slate-500 rounded-full text-sm font-bold hover:bg-slate-200 transition-colors flex items-center gap-2"
+                              >
+                                <ChevronUp size={16} /> Volver a la lista
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            ))}
+            {currentModules.length === 0 && (
+              <div className="p-16 text-center bg-white rounded-3xl border border-dashed border-slate-200 text-slate-400 space-y-4">
+                <div className="bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center mx-auto text-slate-400">
+                  <BookOpen size={36} className="opacity-30" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-700">Sin clases en esta edición</h3>
+                  <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1">
+                    Esta edición aún no tiene módulos cargados o visibles.
+                  </p>
+                </div>
+                {(profile.role === 'profesor' || profile.role === 'administrador') && (
+                  <div className="flex justify-center gap-3 pt-2">
+                    <button
+                      onClick={() => setShowNewModuleModal(true)}
+                      className="px-5 py-2.5 bg-brand-red text-white rounded-xl text-xs font-bold hover:bg-brand-red/90 transition-all shadow-md shadow-brand-red/10"
+                    >
+                      + Crear Primera Clase
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('ediciones')}
+                      className="px-5 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all"
+                    >
+                      Administrar Ediciones
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'foro' && (
+          <div className="max-w-3xl space-y-6">
+            {profile.role === 'alumno' && isSelectedEditionArchived ? (
+              <div className="bg-amber-50 border border-amber-200 p-6 rounded-2xl text-center space-y-1">
+                <p className="text-xs font-black text-amber-900 uppercase tracking-wider">Foro en Modo Archivo Histórico (Solo Lectura)</p>
+                <p className="text-xs text-amber-700">Esta edición ha concluido. Puedes consultar las dudas y respuestas del curso anterior, pero no publicar nuevas consultas.</p>
+              </div>
+            ) : (
+              <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                <h4 className="font-semibold text-slate-700 mb-4">Nueva Consulta</h4>
+                <div className="flex gap-4">
+                  <textarea 
+                    value={newPost}
+                    onChange={(e) => setNewPost(e.target.value)}
+                    placeholder="Escribe tu duda aquí..."
+                    className="flex-1 p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[100px]"
+                  />
+                </div>
+                <div className="flex justify-end mt-4">
+                  <button 
+                    onClick={handlePostForum}
+                    className="bg-blue-600 text-white px-6 py-2 rounded-lg font-semibold hover:bg-blue-700 transition-colors flex items-center gap-2"
+                  >
+                    <Send size={16} /> Publicar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              {currentForum.map(post => (
+                <motion.div 
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  key={post.id} 
+                  className="bg-white p-6 rounded-xl shadow-sm border border-slate-200"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-500">
+                        {post.user[0]}
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-slate-700">{post.user}</p>
+                        <p className="text-[10px] text-slate-400 uppercase tracking-tighter">{new Date(post.date).toLocaleString()}</p>
+                      </div>
+                    </div>
+                    {(profile.role === 'profesor' || profile.role === 'administrador') && (
+                      <button 
+                        onClick={() => handleDeleteForumPost(post.id)}
+                        className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                        title="Eliminar consulta"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-slate-600 text-sm leading-relaxed">{post.text}</p>
+                  
+                  {/* Replies */}
+                  <div className="mt-6 space-y-4">
+                    {post.replies?.map(reply => (
+                      <div key={reply.id} className="flex gap-3 pl-6 border-l-2 border-slate-100">
+                        <div className="w-6 h-6 rounded-full bg-blue-50 flex items-center justify-center text-[10px] font-bold text-blue-500">
+                          {reply.user[0]}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-700">{reply.user}</span>
+                              <span className="text-[10px] text-slate-400 uppercase tracking-tighter">{new Date(reply.date).toLocaleString()}</span>
+                            </div>
+                            {(profile.role === 'profesor' || profile.role === 'administrador') && (
+                              <button 
+                                onClick={() => handleDeleteForumReply(post.id, reply.id)}
+                                className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                                title="Eliminar respuesta"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
+                          <p className="text-slate-600 text-xs leading-relaxed">{reply.text}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Reply Action */}
+                  {!isSelectedEditionArchived && (
+                    <div className="mt-4 pt-4 border-t border-slate-50">
+                      {replyingTo === post.id ? (
+                        <div className="space-y-3">
+                          <textarea 
+                            value={replyText}
+                            onChange={(e) => setReplyText(e.target.value)}
+                            placeholder="Escribe tu respuesta..."
+                            className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[80px]"
+                          />
+                          <div className="flex justify-end gap-2">
+                            <button 
+                              onClick={() => setReplyingTo(null)}
+                              className="px-4 py-1.5 text-xs font-semibold text-slate-500 hover:text-slate-700 transition-colors"
+                            >
+                              Cancelar
+                            </button>
+                            <button 
+                              onClick={() => handleReplyForum(post.id)}
+                              className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-xs font-semibold hover:bg-blue-700 transition-colors"
+                            >
+                              Responder
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button 
+                          onClick={() => setReplyingTo(post.id)}
+                          className="flex items-center gap-2 text-xs font-semibold text-blue-600 hover:text-blue-700 transition-colors"
+                        >
+                          <MessageSquare size={14} /> Responder
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </motion.div>
+              ))}
+
+              {currentForum.length === 0 && (
+                <div className="p-16 text-center bg-white rounded-2xl border border-dashed border-slate-200 text-slate-400 space-y-2">
+                  <MessageSquare size={36} className="mx-auto opacity-20" />
+                  <p className="text-sm font-bold text-slate-600">No hay consultas registradas en esta edición</p>
+                  <p className="text-xs text-slate-400">Las dudas y respuestas publicadas aquí quedarán guardadas exclusivamente en esta cohorte.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'tareas' && profile && (
+          <div className="max-w-5xl mx-auto space-y-8">
+            {/* Filters & Search */}
+            <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-200 flex flex-col md:flex-row gap-4 items-center">
+              <div className="relative flex-1 w-full">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input 
+                  type="text" 
+                  placeholder="Buscar tarea por título..."
+                  value={taskSearch}
+                  onChange={(e) => setTaskSearch(e.target.value)}
+                  className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-100 rounded-2xl text-sm outline-none focus:border-brand-red transition-all"
+                />
+              </div>
+              
+              <div className="flex bg-slate-100 p-1 rounded-2xl w-full md:w-auto">
+                <button 
+                  onClick={() => setTaskFilter('all')}
+                  className={`flex-1 md:flex-none px-4 py-2 rounded-xl text-xs font-bold transition-all ${taskFilter === 'all' ? 'bg-white text-brand-red shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Todas
+                </button>
+                <button 
+                  onClick={() => setTaskFilter('pending')}
+                  className={`flex-1 md:flex-none px-4 py-2 rounded-xl text-xs font-bold transition-all ${taskFilter === 'pending' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Pendientes
+                </button>
+                <button 
+                  onClick={() => setTaskFilter('completed')}
+                  className={`flex-1 md:flex-none px-4 py-2 rounded-xl text-xs font-bold transition-all ${taskFilter === 'completed' ? 'bg-white text-green-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Entregadas
+                </button>
+              </div>
+            </div>
+
+            {/* Admin/Teacher View: Task Management & Submissions */}
+            {(profile.role === 'profesor' || profile.role === 'administrador') && (
+              <div className="space-y-12">
+                {/* Task List for Admin */}
+                <div className="space-y-4">
+                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <FileText size={18} className="text-brand-red" /> Listado de Tareas Publicadas
+                  </h3>
+                  <div className="grid gap-4">
+                    {currentTasks.map((task, idx) => (
+                      <div key={task.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between group hover:border-brand-red/20 transition-colors">
+                        <div className="flex items-center gap-4 min-w-0">
+                          <div className="flex flex-col gap-1 shrink-0">
+                            <button 
+                              disabled={idx === 0}
+                              onClick={() => handleMoveTask(task.id, 'up')}
+                              className="text-slate-300 hover:text-blue-500 disabled:opacity-30"
+                            >
+                              <ArrowUp size={14} />
+                            </button>
+                            <button 
+                              disabled={idx === currentTasks.length - 1}
+                              onClick={() => handleMoveTask(task.id, 'down')}
+                              className="text-slate-300 hover:text-blue-500 disabled:opacity-30"
+                            >
+                              <ArrowDown size={14} />
+                            </button>
+                          </div>
+                          <div className="min-w-0">
+                            <h4 className="font-bold text-slate-700 truncate">{task.title}</h4>
+                            <p className="text-xs text-slate-400">Límite: {new Date(task.deadline).toLocaleDateString(undefined, { timeZone: 'UTC' })}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button 
+                            onClick={() => { setEditingTask(task.id); setEditTaskData({...task}); }}
+                            className="p-2 text-slate-400 hover:text-brand-red hover:bg-brand-red/5 rounded-lg transition-all"
+                          >
+                            <Edit size={18} />
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteTask(task.id)}
+                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {currentTasks.length === 0 && (
+                      <div className="p-8 text-center bg-white rounded-2xl border border-dashed border-slate-200 text-slate-400 text-xs">
+                        No hay tareas configuradas para esta edición. Crea una usando el botón superior "+ Nueva Tarea".
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Submissions Table */}
+                <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+                    <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                      <History size={18} className="text-brand-red" /> Historial de Entregas Recibidas
+                    </h3>
+                    <span className="text-[10px] font-black uppercase bg-brand-red/10 text-brand-red px-2 py-1 rounded-lg">
+                      {currentSubmissions.length} Total
+                    </span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="bg-slate-50/50">
+                          <th className="p-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Alumno</th>
+                          <th className="p-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Tarea</th>
+                          <th className="p-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Fecha</th>
+                          <th className="p-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Archivo/Link</th>
+                          <th className="p-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Estado</th>
+                          <th className="p-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-right">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {currentSubmissions.map(sub => (
+                          <tr key={sub.id} className="hover:bg-slate-50/50 transition-colors group">
+                            <td className="p-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-brand-red/10 text-brand-red flex items-center justify-center font-bold text-xs">
+                                  {sub.studentName.charAt(0)}
+                                </div>
+                                <span className="text-sm font-bold text-slate-700">{sub.studentName}</span>
+                              </div>
+                            </td>
+                            <td className="p-4 text-sm text-slate-600 font-medium">{sub.taskTitle || 'Tarea'}</td>
+                            <td className="p-4 text-xs text-slate-400">{new Date(sub.date).toLocaleDateString()}</td>
+                            <td className="p-4">
+                              <a 
+                                href={sub.fileUrl} 
+                                target="_blank" 
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1.5 text-xs font-bold text-brand-red hover:text-brand-red/80 bg-brand-red/10 px-3 py-1.5 rounded-lg transition-colors"
+                              >
+                                <ExternalLink size={12} /> Ver Entrega
+                              </a>
+                            </td>
+                            <td className="p-4">
+                              <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-lg ${
+                                sub.status === 'Calificado' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                              }`}>
+                                {sub.status}
+                              </span>
+                            </td>
+                            <td className="p-4">
+                              <div className="flex justify-end gap-2 transition-opacity">
+                                <button 
+                                  onClick={() => {
+                                    setGradingSubmission(sub);
+                                    setFeedbackText(sub.teacherFeedback || '');
+                                  }}
+                                  className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                  title="Retroalimentación y Calificación"
+                                >
+                                  <MessageCircle size={18} />
+                                </button>
+                                {sub.status !== 'Calificado' && (
+                                  <button 
+                                    onClick={() => handleGradeSubmission(sub.id)}
+                                    className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                                    title="Marcar como calificada"
+                                  >
+                                    <CheckCircle size={18} />
+                                  </button>
+                                )}
+                                <button 
+                                  onClick={() => handleDeleteSubmission(sub.id)}
+                                  className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title="Eliminar entrega"
+                                >
+                                  <Trash2 size={18} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        {currentSubmissions.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="p-12 text-center">
+                              <div className="flex flex-col items-center opacity-20">
+                                <History size={48} className="mb-4" />
+                                <p className="text-sm font-bold italic">No hay entregas registradas aún en esta edición.</p>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Student View: Task List & Submission */}
+            <div className="grid gap-6">
+              {profile?.teacherFeedback && (
+                <motion.div 
+                  initial={{ opacity: 0, y: -20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-brand-dark rounded-[32px] p-6 sm:p-8 text-white shadow-xl shadow-brand-dark/20 relative overflow-hidden group"
+                >
+                  <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:scale-150 transition-transform duration-700">
+                    <GraduationCap size={120} />
+                  </div>
+                  <div className="relative z-10">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="bg-brand-red p-2 rounded-xl">
+                        <GraduationCap size={24} />
+                      </div>
+                      <h3 className="font-black text-xl tracking-tight">Observaciones Generales</h3>
+                    </div>
+                    <p className="text-white/90 font-medium leading-relaxed whitespace-pre-wrap text-sm sm:text-base">
+                      {profile.teacherFeedback}
+                    </p>
+                  </div>
+                </motion.div>
+              )}
+              {currentTasks
+                .filter(t => t.title.toLowerCase().includes(taskSearch.toLowerCase()))
+                .filter(t => {
+                  const sub = currentSubmissions.find(s => s.taskId === t.id && (profile.role === 'alumno' ? s.studentUid === profile.uid : true));
+                  if (taskFilter === 'pending') return !sub;
+                  if (taskFilter === 'completed') return !!sub;
+                  return true;
+                })
+                .map(task => {
+                  const submission = currentSubmissions.find(s => s.taskId === task.id && (profile.role === 'alumno' ? s.studentUid === profile.uid : true));
+                  return (
+                    <motion.div 
+                      layout
+                      key={task.id} 
+                      className="bg-white rounded-[32px] shadow-sm border border-slate-200 overflow-hidden group hover:shadow-md transition-all"
+                    >
+                      <div className="p-8">
+                        <div className="flex flex-col md:flex-row justify-between items-start gap-6 mb-8">
+                          <div className="flex-1 min-w-0 w-full">
+                            <div className="flex items-center gap-3 mb-4">
+                              <span className="bg-brand-red/10 text-brand-red p-2.5 rounded-2xl shrink-0">
+                                <FileText size={24} />
+                              </span>
+                              <h3 className="text-xl md:text-2xl font-black text-brand-dark tracking-tight group-hover:text-brand-red transition-colors truncate">{task.title}</h3>
+                            </div>
+                            <div className="prose prose-slate prose-sm max-w-none text-slate-600 leading-relaxed bg-brand-gray/50 p-4 md:p-6 rounded-2xl border border-slate-100">
+                              <Markdown>{task.description}</Markdown>
+                            </div>
+                            {task.attachmentUrl && (
+                              <div className="mt-4 flex items-center gap-3 bg-brand-red/5 p-4 rounded-2xl border border-brand-red/10 overflow-hidden">
+                                <div className="bg-brand-red/10 p-2 rounded-xl text-brand-red shrink-0">
+                                  <LinkIcon size={18} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[10px] font-black text-brand-red uppercase tracking-wider mb-0.5">Material de la Tarea</p>
+                                  <a 
+                                    href={task.attachmentUrl} 
+                                    target="_blank" 
+                                    rel="noreferrer" 
+                                    className="text-sm font-bold text-brand-red hover:text-brand-red/80 truncate block transition-colors"
+                                  >
+                                    {task.attachmentUrl}
+                                  </a>
+                                </div>
+                                <a 
+                                  href={task.attachmentUrl} 
+                                  target="_blank" 
+                                  rel="noreferrer"
+                                  className="p-2 bg-white text-brand-red rounded-xl border border-brand-red/10 shadow-sm hover:bg-brand-red/5 transition-all shrink-0"
+                                >
+                                  <ExternalLink size={16} />
+                                </a>
+                              </div>
+                            )}
+                          </div>
+                          
+                          <div className="flex flex-row md:flex-col items-center md:items-end justify-between md:justify-start gap-3 w-full md:w-auto md:min-w-[160px] pt-4 md:pt-0 border-t md:border-t-0 border-slate-100">
+                            {submission ? (
+                              <div className={`flex items-center gap-2 px-3 py-1.5 md:px-4 md:py-2 rounded-2xl font-black text-[10px] uppercase tracking-wider shrink-0 ${
+                                submission.status === 'Calificado' ? 'bg-green-100 text-green-700' : 'bg-brand-red/10 text-brand-red'
+                              }`}>
+                                {submission.status === 'Calificado' ? (
+                                  <><CheckCircle size={14} /> Aprobado</>
+                                ) : (
+                                  <><Clock size={14} /> Entregada</>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2 px-3 py-1.5 md:px-4 md:py-2 rounded-2xl font-black text-[10px] uppercase tracking-wider bg-slate-100 text-slate-500 shrink-0">
+                                <AlertCircle size={14} /> Pendiente
+                              </div>
+                            )}
+                            
+                            <div className="flex items-center gap-2 text-[10px] md:text-xs font-bold text-slate-400 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100 shrink-0">
+                              <Clock size={14} /> Límite: {new Date(task.deadline).toLocaleDateString(undefined, { timeZone: 'UTC' })}
+                            </div>
+                          </div>
+                        </div>
+
+                        {!submission && profile.role === 'alumno' && (
+                          isSelectedEditionArchived ? (
+                            <div className="mt-8 pt-6 border-t border-slate-100 bg-amber-50/70 p-4 rounded-2xl text-center">
+                              <p className="text-xs font-bold text-amber-800">
+                                Esta edición ha finalizado y está archivada. La recepción de entregas está cerrada.
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="mt-8 pt-8 border-t border-slate-100">
+                              <div className="bg-brand-red/5 border border-brand-red/10 p-5 rounded-2xl flex gap-4 items-start mb-6">
+                                <div className="bg-brand-red/10 p-2 rounded-xl text-brand-red mt-0.5">
+                                  <Info size={20} />
+                                </div>
+                                <div className="text-sm text-brand-red leading-relaxed">
+                                  <p className="font-black mb-1">Instrucciones de Entrega</p>
+                                  <p>Sube tu archivo a una plataforma de almacenamiento (Google Drive, Dropbox, etc.) y pega el enlace público aquí. Asegúrate de que el archivo sea accesible para el profesor.</p>
+                                </div>
+                              </div>
+                              
+                              <div className="space-y-4 mb-6">
+                                <div className="relative">
+                                  <LinkIcon className="absolute left-4 top-5 text-slate-400" size={18} />
+                                  <input 
+                                    type="text" 
+                                    placeholder="Pega aquí el enlace a tu tarea..."
+                                    value={submissionUrl[task.id] || ''}
+                                    onChange={(e) => setSubmissionUrl(prev => ({ ...prev, [task.id]: e.target.value }))}
+                                    className="w-full pl-12 pr-4 py-4 bg-white border border-slate-200 rounded-2xl text-sm outline-none focus:border-brand-red focus:ring-4 focus:ring-brand-red/5 transition-all"
+                                  />
+                                </div>
+                                <div className="relative">
+                                  <MessageSquare className="absolute left-4 top-5 text-slate-400" size={18} />
+                                  <textarea 
+                                    placeholder="¿Algún comentario o duda para el profesor? (Opcional)"
+                                    value={submissionComment[task.id] || ''}
+                                    onChange={(e) => setSubmissionComment(prev => ({ ...prev, [task.id]: e.target.value }))}
+                                    className="w-full pl-12 pr-4 py-4 bg-white border border-slate-200 rounded-2xl text-sm outline-none focus:border-brand-red focus:ring-4 focus:ring-brand-red/5 transition-all min-h-[100px] resize-none"
+                                  />
+                                </div>
+                              </div>
+                              
+                              <div className="flex justify-end">
+                                <button 
+                                  onClick={() => handleLinkSubmission(task.id, task.title)}
+                                  disabled={uploading === `submission-${task.id}`}
+                                  className="w-full sm:w-auto px-10 py-4 bg-brand-red text-white rounded-2xl font-black hover:bg-brand-red/90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 shadow-lg shadow-brand-red/20 active:scale-95"
+                                >
+                                  {uploading === `submission-${task.id}` ? (
+                                    <Loader2 size={20} className="animate-spin" />
+                                  ) : (
+                                    <>
+                                      <Send size={20} /> Enviar Tarea
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        )}
+
+                        {submission && (
+                          <>
+                            <div className="mt-8 pt-8 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-6">
+                              <div className="flex items-center gap-4">
+                                <div className="w-16 h-16 rounded-3xl bg-brand-red/5 border border-brand-red/10 flex items-center justify-center text-brand-red">
+                                  <ExternalLink size={28} />
+                                </div>
+                                <div>
+                                  <p className="text-sm font-black text-brand-dark">Tu Entrega</p>
+                                  <p className="text-xs text-slate-400 mb-2">Enviado el {new Date(submission.date).toLocaleDateString()}</p>
+                                  <a 
+                                    href={submission.fileUrl} 
+                                    target="_blank" 
+                                    rel="noreferrer" 
+                                    className="inline-flex items-center gap-2 text-xs font-bold text-brand-red hover:text-brand-red/80 bg-brand-red/10 px-4 py-2 rounded-xl transition-all group/link"
+                                  >
+                                    Ver enlace enviado <ExternalLink size={12} className="group-hover/link:translate-x-0.5 group-hover/link:-translate-y-0.5 transition-transform" />
+                                  </a>
+                                  {submission.status !== 'Calificado' && !isSelectedEditionArchived && (
+                                    <button 
+                                      onClick={() => handleDeleteSubmission(submission.id)}
+                                      className="ml-2 inline-flex items-center gap-2 text-xs font-bold text-slate-400 hover:text-red-500 hover:bg-red-50 px-3 py-2 rounded-xl transition-all"
+                                      title="Eliminar mi entrega para volver a subirla"
+                                    >
+                                      <Trash2 size={14} /> Eliminar
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                              
+                              <div className="flex flex-col gap-4 w-full sm:w-auto">
+                                {submission.status === 'Calificado' ? (
+                                  <div className="flex items-center gap-4 bg-green-50 px-6 py-4 rounded-[24px] border border-green-100">
+                                    <div className="bg-green-100 p-2 rounded-xl text-green-600">
+                                      <CheckCircle size={24} />
+                                    </div>
+                                    <div>
+                                      <p className="text-sm font-black text-green-800 uppercase tracking-wider">Tarea Aprobada</p>
+                                      <p className="text-xs text-green-600 font-bold">Revisa la retroalimentación</p>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-4 bg-amber-50 px-6 py-4 rounded-[24px] border border-amber-100">
+                                    <div className="bg-amber-100 p-2 rounded-xl text-amber-600">
+                                      <Clock size={24} />
+                                    </div>
+                                    <div>
+                                      <p className="text-sm font-black text-amber-800 uppercase tracking-wider">Recibido</p>
+                                      <p className="text-xs text-amber-600 font-bold">Esperando revisión</p>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            
+                            {(submission.studentComment || submission.teacherFeedback) && (
+                              <div className="mt-6 space-y-4">
+                                {submission.studentComment && (
+                                  <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-2">
+                                      <MessageSquare size={12} /> Tu Comentario
+                                    </p>
+                                    <p className="text-sm text-slate-600 leading-relaxed italic">"{submission.studentComment}"</p>
+                                  </div>
+                                )}
+                                
+                                {submission.teacherFeedback && (
+                                  <div className="bg-brand-red/5 p-6 rounded-3xl border border-brand-red/10 border-l-4">
+                                    <p className="text-[10px] font-black text-brand-red uppercase tracking-widest mb-2 flex items-center gap-2">
+                                      <GraduationCap size={16} /> Retroalimentación del Profesor
+                                    </p>
+                                    <p className="text-sm text-slate-700 font-medium leading-relaxed whitespace-pre-wrap">{submission.teacherFeedback}</p>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              
+              {currentTasks.length === 0 && (
+                <div className="p-24 text-center bg-white rounded-[40px] border border-dashed border-slate-200 text-slate-400">
+                  <div className="bg-slate-50 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <FileText size={48} className="opacity-20" />
+                  </div>
+                  <h3 className="text-xl font-black text-slate-800 mb-2">No hay tareas disponibles</h3>
+                  <p className="text-sm max-w-xs mx-auto">
+                    {profile.role === 'alumno' 
+                      ? '¡Buen trabajo! Estás al día con tus entregas o aún no se han publicado tareas para esta cohorte.' 
+                      : 'No hay tareas configuradas para esta edición. Puedes crearlas usando el botón superior.'}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'admin' && (profile.role === 'profesor' || profile.role === 'administrador') && (
+          <div className="space-y-6">
+            <AdminSurveyConfig 
+              config={surveyConfig} 
+              onUpdate={(newConfig) => setSurveyConfig(newConfig)} 
+            />
+
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="p-4 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                <h3 className="font-bold text-slate-700 flex items-center gap-2">
+                  <UserPlus size={18} /> Gestión de Usuarios y Roles
+                  {isAdminUsersCollapsed && (
+                    <span className="ml-2 px-2 py-0.5 bg-brand-red/10 text-brand-red text-[10px] font-bold rounded-full uppercase tracking-wider">Minimizado</span>
+                  )}
+                </h3>
+                <div className="flex items-center gap-2">
+                  {!isAdminUsersCollapsed && (
+                    <button 
+                      onClick={handleDownloadSurveyCSV}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-brand-dark text-white rounded-lg text-xs font-bold hover:bg-brand-dark/90 transition-all"
+                    >
+                      <Download size={14} /> CSV
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => setIsAdminUsersCollapsed(!isAdminUsersCollapsed)}
+                    className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg transition-all"
+                    title={isAdminUsersCollapsed ? "Maximizar" : "Minimizar"}
+                  >
+                    {isAdminUsersCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+                  </button>
+                </div>
+              </div>
+              
+              <AnimatePresence>
+                {!isAdminUsersCollapsed && (
+                  <motion.div 
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                    className="overflow-x-auto"
+                  >
+                    <table className="w-full text-left min-w-[600px]">
+                      <thead className="bg-slate-50 border-bottom border-slate-200">
+                        <tr>
+                          <th className="p-4 text-xs font-bold uppercase text-slate-400">Nombre</th>
+                          <th className="p-4 text-xs font-bold uppercase text-slate-400">Email</th>
+                          <th className="p-4 text-xs font-bold uppercase text-slate-400">Nivel Sugerido</th>
+                          <th className="p-4 text-xs font-bold uppercase text-slate-400">Rol Actual</th>
+                          <th className="p-4 text-xs font-bold uppercase text-slate-400">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {allUsers.map(u => (
+                          <tr key={u.uid} className="hover:bg-slate-50 transition-colors">
+                            <td className="p-4 text-sm font-medium text-slate-700">{u.displayName}</td>
+                            <td className="p-4 text-sm text-slate-500">{u.email}</td>
+                            <td className="p-4">
+                              {u.suggested_level ? (
+                                <div className="flex items-center gap-2">
+                                  <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${
+                                    u.suggested_level === 'Avanzado' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                                  }`}>
+                                    {u.suggested_level}
+                                  </span>
+                                  <button 
+                                    onClick={() => {
+                                      const resp = surveyResponses.find(r => r.user_id === u.uid);
+                                      if (resp) setViewingSurveyResponse(resp);
+                                    }}
+                                    className="p-1 text-slate-400 hover:text-brand-red transition-colors"
+                                    title="Ver Respuestas"
+                                  >
+                                    <Eye size={16} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-slate-300 italic">No completado</span>
+                              )}
+                            </td>
+                            <td className="p-4">
+                              <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${
+                                u.role === 'profesor' ? 'bg-brand-red/10 text-brand-red' : 
+                                u.role === 'administrador' ? 'bg-brand-dark text-white' : 
+                                'bg-slate-100 text-slate-700'
+                              }`}>
+                                {u.role}
+                              </span>
+                            </td>
+                            <td className="p-4 flex gap-2 items-center">
+                              <select 
+                                value={u.role}
+                                onChange={(e) => handleUpdateUserRole(u.uid, e.target.value as UserRole)}
+                                className="text-xs p-1 border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                              >
+                                <option value="alumno">Alumno</option>
+                                <option value="profesor">Profesor</option>
+                                <option value="administrador">Administrador</option>
+                              </select>
+                              {u.status === 'pending' && (
+                                <button 
+                                  onClick={() => handleApproveUser(u.uid)}
+                                  className="bg-brand-red text-white px-3 py-1 rounded text-[10px] font-bold hover:bg-brand-red/90 transition-all active:scale-95"
+                                >
+                                  Aprobar
+                                </button>
+                              )}
+                              <button 
+                                onClick={() => {
+                                  setGradingUserProfile(u);
+                                  setUserFeedbackText(u.teacherFeedback || '');
+                                }}
+                                className="p-1.5 text-slate-400 hover:text-blue-600 transition-colors"
+                                title="Observaciones del Alumno"
+                              >
+                                <MessageCircle size={16} />
+                              </button>
+                              <button 
+                                onClick={() => handleDeleteUser(u.uid)}
+                                className="p-1.5 text-slate-400 hover:text-brand-red transition-colors"
+                                title="Eliminar Usuario"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'ediciones' && (profile.role === 'profesor' || profile.role === 'administrador') && (
+          <EditionsManager
+            editions={editions}
+            selectedEditionId={selectedEditionId}
+            onSelectEdition={setSelectedEditionId}
+            onCreateEdition={handleCreateEdition}
+            onUpdateEdition={handleUpdateEdition}
+            onSetActiveEdition={handleSetActiveEdition}
+            onDeleteEdition={handleDeleteEdition}
+            onAssignUserEditions={handleAssignUserEditions}
+            modules={modules}
+            tasks={tasks}
+            forum={forum}
+            submissions={submissions}
+            allUsers={allUsers}
+            profile={profile}
+            onNavigateToTab={(tab) => setActiveTab(tab)}
+          />
+        )}
+        {/* Survey Response Modal */}
+        {viewingSurveyResponse && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white rounded-[32px] shadow-2xl w-full max-w-2xl overflow-hidden"
+            >
+              <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <div>
+                  <h3 className="font-black text-xl text-brand-dark tracking-tight">Encuesta de Diagnóstico</h3>
+                  <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">{viewingSurveyResponse.user_name}</p>
+                </div>
+                <button onClick={() => setViewingSurveyResponse(null)} className="p-2 bg-white text-slate-400 hover:text-brand-red rounded-xl shadow-sm transition-all"><X size={20} /></button>
+              </div>
+              <div className="p-8 max-h-[70vh] overflow-y-auto space-y-8 custom-scrollbar">
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Familiaridad (1-5)</p>
+                    <p className="text-2xl font-black text-brand-red">{viewingSurveyResponse.familiarity}</p>
+                  </div>
+                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Frecuencia de Uso</p>
+                    <p className="text-lg font-black text-brand-dark">{viewingSurveyResponse.frequency}</p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Herramientas Conocidas</p>
+                  <div className="flex flex-wrap gap-2">
+                    {viewingSurveyResponse.tools.map(t => (
+                      <span key={t} className="px-3 py-1.5 bg-brand-red/5 text-brand-red rounded-xl text-xs font-bold border border-brand-red/10">{t}</span>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Perfil Profesional</p>
+                  <p className="text-sm text-slate-700 font-medium leading-relaxed bg-slate-50 p-4 rounded-2xl border border-slate-100">{viewingSurveyResponse.professional_profile}</p>
+                </div>
+
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Objetivo de Automatización</p>
+                  <p className="text-sm text-slate-700 font-medium leading-relaxed bg-slate-50 p-4 rounded-2xl border border-slate-100">{viewingSurveyResponse.automation_goal}</p>
+                </div>
+
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Conocimientos Técnicos</p>
+                  <p className="text-sm text-slate-700 font-medium leading-relaxed bg-slate-50 p-4 rounded-2xl border border-slate-100">{viewingSurveyResponse.technical_validation}</p>
+                </div>
+
+                <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nivel Sugerido:</span>
+                    <span className={`text-xs font-black uppercase px-3 py-1 rounded-xl ${
+                      viewingSurveyResponse.suggested_level === 'Avanzado' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                    }`}>
+                      {viewingSurveyResponse.suggested_level}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-300 font-bold">{new Date(viewingSurveyResponse.timestamp).toLocaleString()}</p>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+        {/* New Task Modal */}
+        {showNewTaskModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 className="font-bold text-slate-800">Crear Nueva Tarea</h3>
+                <button onClick={() => setShowNewTaskModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Título de la Tarea</label>
+                  <input 
+                    type="text" 
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                    placeholder="Ej: Ensayo sobre Ética en IA"
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-red"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Descripción</label>
+                  <textarea 
+                    value={newTaskDescription}
+                    onChange={(e) => setNewTaskDescription(e.target.value)}
+                    placeholder="Detalla las instrucciones de la tarea..."
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm h-32 resize-none focus:outline-none focus:ring-2 focus:ring-brand-red"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Fecha Límite</label>
+                  <input 
+                    type="date" 
+                    value={newTaskDeadline}
+                    onChange={(e) => setNewTaskDeadline(e.target.value)}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-red"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Link de Material Adjunto (Drive/Dropbox)</label>
+                  <input 
+                    type="text" 
+                    value={newTaskAttachmentUrl}
+                    onChange={(e) => setNewTaskAttachmentUrl(e.target.value)}
+                    placeholder="https://drive.google.com/..."
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-red"
+                  />
+                </div>
+                <button 
+                  onClick={handleCreateTask}
+                  className="w-full py-4 bg-brand-red text-white rounded-xl font-bold hover:bg-brand-red/90 transition-all shadow-lg shadow-brand-red/20 active:scale-95"
+                >
+                  Publicar Tarea
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Edit Task Modal */}
+        {editingTask && editTaskData && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 className="font-bold text-slate-800">Editar Tarea</h3>
+                <button onClick={() => setEditingTask(null)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Título</label>
+                  <input 
+                    type="text" 
+                    value={editTaskData.title}
+                    onChange={(e) => setEditTaskData({...editTaskData, title: e.target.value})}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Descripción</label>
+                  <textarea 
+                    value={editTaskData.description}
+                    onChange={(e) => setEditTaskData({...editTaskData, description: e.target.value})}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm h-32 resize-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Fecha Límite</label>
+                  <input 
+                    type="date" 
+                    value={editTaskData.deadline?.split('T')[0] || ''}
+                    onChange={(e) => setEditTaskData({...editTaskData, deadline: new Date(e.target.value).toISOString()})}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Link de Material Adjunto</label>
+                  <input 
+                    type="text" 
+                    value={editTaskData.attachmentUrl || ''}
+                    onChange={(e) => setEditTaskData({...editTaskData, attachmentUrl: e.target.value})}
+                    placeholder="https://drive.google.com/..."
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-sm"
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setEditingTask(null)}
+                    className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    onClick={handleUpdateTask}
+                    className="flex-1 py-3 bg-brand-red text-white rounded-xl font-bold hover:bg-brand-red/90 transition-all shadow-lg shadow-brand-red/10 active:scale-95"
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+        {/* Grading and Feedback Modal */}
+        {gradingSubmission && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 className="font-black text-slate-800 flex items-center gap-2">
+                  <MessageCircle size={20} className="text-brand-red" /> 
+                  Retroalimentación: {gradingSubmission.studentName}
+                </h3>
+                <button onClick={() => setGradingSubmission(null)} className="text-slate-400 hover:text-slate-600 p-2 hover:bg-slate-100 rounded-xl transition-all">
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div className="p-6 space-y-6">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Tarea</label>
+                  <p className="text-sm font-bold text-slate-700">{gradingSubmission.taskTitle}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Fecha de Entrega</label>
+                    <p className="text-sm text-slate-600 font-medium">{new Date(gradingSubmission.date).toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Enlace</label>
+                    <a 
+                      href={gradingSubmission.fileUrl} 
+                      target="_blank" 
+                      rel="noreferrer"
+                      className="text-xs font-bold text-brand-red hover:underline flex items-center gap-1"
+                    >
+                      <ExternalLink size={12} /> Abrir Tarea
+                    </a>
+                  </div>
+                </div>
+
+                {gradingSubmission.studentComment && (
+                  <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100">
+                    <label className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-2 block flex items-center gap-2">
+                      <User size={12} /> Comentario del Alumno
+                    </label>
+                    <p className="text-sm text-blue-900 leading-relaxed italic">"{gradingSubmission.studentComment}"</p>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Tu Retroalimentación / Respuesta</label>
+                  <textarea 
+                    value={feedbackText}
+                    onChange={(e) => setFeedbackText(e.target.value)}
+                    placeholder="Escribe aquí tus comentarios, correcciones o respuestas..."
+                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:outline-none focus:ring-4 focus:ring-brand-red/5 min-h-[150px] resize-none font-medium text-slate-700"
+                  />
+                </div>
+
+                <div className="pt-4 flex flex-col gap-3">
+                  <div className="flex gap-3">
+                    <button 
+                      onClick={() => handleUpdateFeedback(gradingSubmission.id)}
+                      className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-black hover:bg-slate-200 transition-all active:scale-95 flex items-center justify-center gap-2"
+                    >
+                      <Save size={18} /> Guardar Comentario
+                    </button>
+                    <button 
+                      onClick={() => handleGradeSubmission(gradingSubmission.id)}
+                      className="flex-1 py-4 bg-brand-dark text-white rounded-2xl font-black hover:bg-brand-dark/90 transition-all shadow-lg shadow-brand-dark/20 active:scale-95 flex items-center justify-center gap-2"
+                    >
+                      <CheckCircle size={18} /> {gradingSubmission.status === 'Calificado' ? 'Finalizar Cambios' : 'Calificar Tarea'}
+                    </button>
+                  </div>
+                  <button 
+                    onClick={() => setGradingSubmission(null)}
+                    className="w-full py-3 text-slate-400 text-xs font-bold hover:text-slate-600 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+        {/* User Statistics and General Feedback Modal */}
+        {gradingUserProfile && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 className="font-black text-slate-800 flex items-center gap-2">
+                  <User size={20} className="text-brand-red" /> 
+                  Observaciones: {gradingUserProfile.displayName}
+                </h3>
+                <button onClick={() => setGradingUserProfile(null)} className="text-slate-400 hover:text-slate-600 p-2 hover:bg-slate-100 rounded-xl transition-all">
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div className="p-6 space-y-6">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Email</label>
+                    <p className="text-sm font-bold text-slate-700">{gradingUserProfile.email}</p>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Nivel</label>
+                    <span className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase ${gradingUserProfile.suggested_level === 'Avanzado' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                      {gradingUserProfile.suggested_level || 'Pendiente'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Comentarios Generales sobre el Alumno</label>
+                  <textarea 
+                    value={userFeedbackText}
+                    onChange={(e) => setUserFeedbackText(e.target.value)}
+                    placeholder="Escribe aquí observaciones generales, progreso, o respuestas a dudas recurrentes..."
+                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:outline-none focus:ring-4 focus:ring-brand-red/5 min-h-[150px] resize-none font-medium text-slate-700"
+                  />
+                </div>
+
+                <div className="pt-4 flex flex-col gap-3">
+                  <button 
+                    onClick={() => handleUpdateUserFeedback(gradingUserProfile.uid)}
+                    className="w-full py-4 bg-brand-dark text-white rounded-2xl font-black hover:bg-brand-dark/90 transition-all shadow-lg shadow-brand-dark/20 active:scale-95 flex items-center justify-center gap-2"
+                  >
+                    <Save size={18} /> Guardar Observaciones
+                  </button>
+                  <button 
+                    onClick={() => setGradingUserProfile(null)}
+                    className="w-full py-3 text-slate-400 text-xs font-bold hover:text-slate-600 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+        {/* Confirmation Modal */}
+        <AnimatePresence>
+          {confirmModal.show && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="bg-white rounded-2xl shadow-xl border border-slate-200 w-full max-w-md overflow-hidden"
+              >
+                <div className="p-6">
+                  <h3 className="text-lg font-bold text-slate-800 mb-2">{confirmModal.title}</h3>
+                  <p className="text-slate-600 text-sm">{confirmModal.message}</p>
+                </div>
+                <div className="bg-slate-50 p-4 flex justify-end gap-3">
+                  <button 
+                    onClick={() => setConfirmModal(prev => ({ ...prev, show: false }))}
+                    className="px-4 py-2 text-sm font-semibold text-slate-600 hover:text-slate-800 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    onClick={confirmModal.onConfirm}
+                    className="bg-brand-red text-white px-6 py-2 rounded-lg text-sm font-bold hover:bg-brand-red/90 transition-all active:scale-95"
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+      </main>
+    </div>
+  );
+}
+
+function AdminSurveyConfig({ config, onUpdate }: { config: SurveyConfig, onUpdate: (newConfig: SurveyConfig) => void }) {
+  const [editingConfig, setEditingConfig] = useState(config);
+  const [newTool, setNewTool] = useState('');
+  const [isMinimized, setIsMinimized] = useState(true);
+
+  const handleSave = async () => {
+    try {
+      await setDoc(doc(db, 'config', 'survey'), editingConfig);
+      onUpdate(editingConfig);
+      alert('Configuración guardada exitosamente');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'config/survey');
+    }
+  };
+
+  const addTool = () => {
+    if (newTool.trim() && !editingConfig.toolsOptions.includes(newTool.trim())) {
+      setEditingConfig({
+        ...editingConfig,
+        toolsOptions: [...editingConfig.toolsOptions, newTool.trim()].sort()
+      });
+      setNewTool('');
+    }
+  };
+
+  const removeTool = (tool: string) => {
+    setEditingConfig({
+      ...editingConfig,
+      toolsOptions: editingConfig.toolsOptions.filter(t => t !== tool),
+      advancedTools: editingConfig.advancedTools.filter(t => t !== tool)
+    });
+  };
+
+  const toggleAdvanced = (tool: string) => {
+    const isAdv = editingConfig.advancedTools.includes(tool);
+    setEditingConfig({
+      ...editingConfig,
+      advancedTools: isAdv 
+        ? editingConfig.advancedTools.filter(t => t !== tool)
+        : [...editingConfig.advancedTools, tool]
+    });
+  };
+
+  const addCustomQuestion = () => {
+    const newQ: CustomQuestion = {
+      id: `custom_${Date.now()}`,
+      text: '¿Nueva pregunta?',
+      type: 'select',
+      options: ['Sí', 'No'],
+      required: true
+    };
+    setEditingConfig({
+      ...editingConfig,
+      customQuestions: [...(editingConfig.customQuestions || []), newQ]
+    });
+  };
+
+  const updateCustomQuestion = (id: string, updates: Partial<CustomQuestion>) => {
+    setEditingConfig({
+      ...editingConfig,
+      customQuestions: editingConfig.customQuestions?.map(q => q.id === id ? { ...q, ...updates } : q)
+    });
+  };
+
+  const removeCustomQuestion = (id: string) => {
+    setEditingConfig({
+      ...editingConfig,
+      customQuestions: editingConfig.customQuestions?.filter(q => q.id !== id)
+    });
+  };
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <div className="flex justify-between items-center bg-slate-50 p-6 border-b border-slate-200">
+        <h3 className="font-bold text-slate-700 flex items-center gap-2">
+          <Edit size={18} className="text-brand-red" /> Configuración de Encuesta de Diagnóstico
+          {isMinimized && (
+            <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold rounded-full uppercase tracking-wider">Minimizado</span>
+          )}
+        </h3>
+        <div className="flex items-center gap-3">
+          {!isMinimized && (
+            <button 
+              onClick={handleSave}
+              className="px-4 py-1.5 bg-brand-red text-white rounded-lg text-xs font-bold hover:bg-brand-red/90 transition-all flex items-center gap-2 shadow-lg shadow-brand-red/10"
+            >
+              <CheckCircle size={14} /> Guardar Cambios
+            </button>
+          )}
+          <button 
+            onClick={() => setIsMinimized(!isMinimized)}
+            className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 rounded-lg transition-all"
+            title={isMinimized ? "Maximizar" : "Minimizar"}
+          >
+            {isMinimized ? <ChevronDown size={20} /> : <ChevronUp size={20} />}
+          </button>
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {!isMinimized && (
+          <motion.div 
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.3 }}
+          >
+            <div className="p-6 space-y-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                {/* Tools Section */}
+                <div className="space-y-4">
+                  <h4 className="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                    <Users size={14} /> Gestión de Herramientas
+                  </h4>
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      value={newTool}
+                      onChange={(e) => setNewTool(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && addTool()}
+                      placeholder="Escribe el nombre de una herramienta..."
+                      className="flex-1 p-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-brand-red/20 outline-none"
+                    />
+                    <button 
+                      onClick={addTool} 
+                      className="px-4 bg-brand-red text-white rounded-xl font-bold hover:bg-brand-red/90 transition-all"
+                    >
+                      Añadir
+                    </button>
+                  </div>
+                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 min-h-[200px] max-h-[400px] overflow-y-auto">
+                    <div className="flex flex-wrap gap-2">
+                      {editingConfig.toolsOptions.map(tool => (
+                        <div 
+                          key={tool} 
+                          className={`flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-xl text-xs font-bold transition-all border shadow-sm ${
+                            editingConfig.advancedTools.includes(tool) 
+                              ? 'bg-amber-50 border-amber-200 text-amber-700' 
+                              : 'bg-white border-slate-200 text-slate-600'
+                          }`}
+                        >
+                          <button 
+                            onClick={() => toggleAdvanced(tool)} 
+                            className="hover:scale-105 transition-transform flex items-center gap-1.5"
+                            title={editingConfig.advancedTools.includes(tool) ? "Herramienta Avanzada" : "Marcar como Avanzada"}
+                          >
+                            {tool}
+                            {editingConfig.advancedTools.includes(tool) && <ShieldCheck size={12} className="text-amber-500" />}
+                          </button>
+                          <button 
+                            onClick={() => removeTool(tool)} 
+                            className="p-1 hover:bg-red-50 hover:text-brand-red rounded-lg transition-colors"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    {editingConfig.toolsOptions.length === 0 && (
+                      <div className="flex flex-col items-center justify-center h-48 text-slate-400 italic text-sm">
+                        Sin herramientas configuradas
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-500 bg-amber-50 p-3 rounded-lg border border-amber-100 italic">
+                    <strong>Instrucciones:</strong> Haz clic en el nombre de una herramienta para marcarla como <strong>"Tecnología Avanzada"</strong>. 
+                    Si un alumno marca una de estas, el sistema sugerirá nivel Avanzado automáticamente.
+                  </p>
+                </div>
+
+                {/* Lógica Section */}
+                <div className="space-y-6">
+                  <div className="space-y-4">
+                    <h4 className="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                      <Plus size={14} /> Lógica de Decisión (Frecuencia y Técnica)
+                    </h4>
+                    <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-6">
+                      <div className="space-y-3">
+                        <label className="text-sm font-bold text-slate-700 block">¿A partir de qué frecuencia se considera un perfil experto?</label>
+                        <div className="flex flex-wrap gap-2">
+                          {editingConfig.frequencyOptions.map(freq => (
+                            <button
+                              key={freq}
+                              onClick={() => setEditingConfig({...editingConfig, advancedThresholdFrequency: freq})}
+                              className={`px-4 py-2 rounded-xl text-sm font-bold transition-all border ${
+                                editingConfig.advancedThresholdFrequency === freq
+                                ? 'bg-brand-red border-brand-red text-white shadow-md'
+                                : 'bg-white border-slate-200 text-slate-500 hover:border-brand-red/30'
+                              }`}
+                            >
+                              {freq}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <label className="text-sm font-bold text-slate-700 block">¿Qué respuesta de validación técnica dispara el nivel avanzado?</label>
+                        <div className="flex flex-wrap gap-2">
+                          {editingConfig.technicalOptions.map(opt => (
+                            <button
+                              key={opt}
+                              onClick={() => setEditingConfig({...editingConfig, advancedThresholdTechnical: opt})}
+                              className={`px-4 py-2 rounded-xl text-sm font-bold transition-all border ${
+                                editingConfig.advancedThresholdTechnical === opt
+                                ? 'bg-brand-red border-brand-red text-white shadow-md'
+                                : 'bg-white border-slate-200 text-slate-500 hover:border-brand-red/30'
+                              }`}
+                            >
+                              {opt}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100 space-y-3">
+                    <h5 className="font-bold text-blue-700 flex items-center gap-2 text-sm">
+                      <Info size={16} /> Poder de Decisión Automático
+                    </h5>
+                    <p className="text-xs text-blue-600 leading-relaxed">
+                      El alumno será sugerido como <strong>"Avanzado"</strong> si:
+                    </p>
+                    <ul className="text-xs text-blue-800 space-y-2 list-disc pl-4 font-medium italic">
+                      <li>Selecciona al menos una herramienta marcada como "Avanzada".</li>
+                      <li><strong>O BIEN</strong>, selecciona la frecuencia "{editingConfig.advancedThresholdFrequency}" Y la validación técnica "{editingConfig.advancedThresholdTechnical}".</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 pt-8 mt-4">
+                <div className="flex justify-between items-center mb-6">
+                  <h4 className="font-black text-xs text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                    <MessageSquare size={14} /> Preguntas Adicionales Personalizadas
+                  </h4>
+                  <button 
+                    onClick={addCustomQuestion}
+                    className="px-4 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-all flex items-center gap-2"
+                  >
+                    <Plus size={14} /> Agregar Pregunta
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  {editingConfig.customQuestions?.map((q, idx) => (
+                    <div key={q.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 relative group">
+                      <button 
+                        onClick={() => removeCustomQuestion(q.id)}
+                        className="absolute top-4 right-4 p-2 text-slate-300 hover:text-brand-red transition-all"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                        <div className="md:col-span-3 space-y-4">
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pregunta #{idx + 1}</label>
+                            <input 
+                              type="text" 
+                              value={q.text}
+                              onChange={(e) => updateCustomQuestion(q.id, { text: e.target.value })}
+                              className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-red transition-all font-bold text-slate-700"
+                            />
+                          </div>
+                          
+                          {q.type === 'select' && (
+                            <div className="space-y-2">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Opciones (separadas por coma)</label>
+                              <input 
+                                type="text" 
+                                value={q.options?.join(', ') || ''}
+                                onChange={(e) => updateCustomQuestion(q.id, { 
+                                  options: e.target.value.split(',').map(s => s.trim()).filter(Boolean) 
+                                })}
+                                placeholder="Opción 1, Opción 2, Opción 3..."
+                                className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-red transition-all text-sm text-slate-600"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Tipo</label>
+                            <select 
+                              value={q.type}
+                              onChange={(e) => updateCustomQuestion(q.id, { type: e.target.value as 'text' | 'select' })}
+                              className="w-full p-3 bg-white border border-slate-200 rounded-xl outline-none focus:border-brand-red transition-all text-sm font-bold text-slate-600"
+                            >
+                              <option value="select">Selección (Opciones)</option>
+                              <option value="text">Texto Libre</option>
+                            </select>
+                          </div>
+
+                          <div className="flex items-center gap-2 pt-2">
+                            <input 
+                              type="checkbox"
+                              id={`req_${q.id}`}
+                              checked={q.required}
+                              onChange={(e) => updateCustomQuestion(q.id, { required: e.target.checked })}
+                              className="w-4 h-4 text-brand-red border-slate-300 rounded focus:ring-brand-red"
+                            />
+                            <label htmlFor={`req_${q.id}`} className="text-xs font-bold text-slate-500 cursor-pointer">Obligatoria</label>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {(!editingConfig.customQuestions || editingConfig.customQuestions.length === 0) && (
+                    <div className="text-center p-12 bg-slate-50 rounded-3xl border border-dashed border-slate-200 text-slate-400 italic">
+                      Sin preguntas personalizadas adicionales.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+export default function App() {
+  return <AppContent />;
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Curso IA 2026 - CEC",
+  "description": "Plataforma educativa simplificada para cursos de Inteligencia Artificial con gestión de contenidos, tareas y foro por ediciones.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

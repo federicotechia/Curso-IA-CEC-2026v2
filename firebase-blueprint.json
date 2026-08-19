@@ -1,0 +1,186 @@
+{
+  "entities": {
+    "Edition": {
+      "title": "Edition",
+      "description": "Course edition / cohort configuration",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["activa", "archivada", "planificada"] },
+        "createdAt": { "type": "string" },
+        "createdOrder": { "type": "number" }
+      },
+      "required": ["name", "isActive", "status", "createdAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile with role, approval status and enrolled editions",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["profesor", "alumno", "administrador"] },
+        "status": { "type": "string", "enum": ["pending", "approved"] },
+        "displayName": { "type": "string" },
+        "uid": { "type": "string" },
+        "enrolledEditions": { "type": "array", "items": { "type": "string" } },
+        "defaultEditionId": { "type": "string" },
+        "survey_completed": { "type": "boolean" },
+        "suggested_level": { "type": "string", "enum": ["Principiante", "Avanzado"] },
+        "teacherFeedback": { "type": "string" }
+      },
+      "required": ["email", "role", "status", "uid"]
+    },
+    "SurveyResponse": {
+      "title": "SurveyResponse",
+      "description": "Diagnostic survey response from a student",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "user_name": { "type": "string" },
+        "familiarity": { "type": "number" },
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "frequency": { "type": "string" },
+        "professional_profile": { "type": "string" },
+        "automation_goal": { "type": "string" },
+        "technical_validation": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "suggested_level": { "type": "string", "enum": ["Principiante", "Avanzado"] },
+        "editionId": { "type": "string" },
+        "custom_responses": { "type": "object" }
+      },
+      "required": ["user_id", "familiarity", "tools", "frequency", "suggested_level"]
+    },
+    "ClassModule": {
+      "title": "ClassModule",
+      "description": "Educational module content",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "visible": { "type": "boolean" },
+        "notebookLMUrl": { "type": "string" },
+        "editionId": { "type": "string" },
+        "materials": { "type": "array", "items": { "$ref": "Material" } },
+        "extra": { "type": "array", "items": { "$ref": "Material" } },
+        "task": { "$ref": "Task" }
+      },
+      "required": ["title", "visible"]
+    },
+    "Material": {
+      "title": "Material",
+      "description": "Class material (PDF, Video, Link)",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["pdf", "video", "link"] },
+        "title": { "type": "string" },
+        "url": { "type": "string" }
+      }
+    },
+    "Task": {
+      "title": "Task",
+      "description": "Assignment for a module",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "deadline": { "type": "string" },
+        "description": { "type": "string" },
+        "editionId": { "type": "string" }
+      }
+    },
+    "ForumPost": {
+      "title": "ForumPost",
+      "description": "Post in the forum",
+      "type": "object",
+      "properties": {
+        "user": { "type": "string" },
+        "text": { "type": "string" },
+        "date": { "type": "string" },
+        "uid": { "type": "string" },
+        "editionId": { "type": "string" }
+      },
+      "required": ["user", "text", "date", "uid"]
+    },
+    "Submission": {
+      "title": "Submission",
+      "description": "Student task submission",
+      "type": "object",
+      "properties": {
+        "studentName": { "type": "string" },
+        "studentUid": { "type": "string" },
+        "taskId": { "type": "number" },
+        "fileName": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string", "enum": ["Recibido", "Calificado"] },
+        "editionId": { "type": "string" },
+        "studentComment": { "type": "string" },
+        "teacherFeedback": { "type": "string" }
+      },
+      "required": ["studentUid", "taskId", "fileName", "date", "status"]
+    },
+    "SurveyConfig": {
+      "title": "SurveyConfig",
+      "description": "Configuration for the diagnostic survey",
+      "type": "object",
+      "properties": {
+        "toolsOptions": { "type": "array", "items": { "type": "string" } },
+        "advancedTools": { "type": "array", "items": { "type": "string" } },
+        "frequencyOptions": { "type": "array", "items": { "type": "string" } },
+        "technicalOptions": { "type": "array", "items": { "type": "string" } },
+        "advancedThresholdFrequency": { "type": "string" },
+        "advancedThresholdTechnical": { "type": "string" },
+        "customQuestions": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "text": { "type": "string" },
+              "type": { "type": "string", "enum": ["text", "select"] },
+              "options": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      },
+      "required": ["toolsOptions", "advancedTools", "frequencyOptions", "technicalOptions"]
+    }
+  },
+  "firestore": {
+    "/editions/{editionId}": {
+      "schema": "Edition",
+      "description": "Course editions / cohorts"
+    },
+    "/users/{uid}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/config/survey": {
+      "schema": "SurveyConfig",
+      "description": "Diagnostic survey configuration"
+    },
+    "/modules/{moduleId}": {
+      "schema": "ClassModule",
+      "description": "Course modules"
+    },
+    "/forum/{postId}": {
+      "schema": "ForumPost",
+      "description": "Forum main posts"
+    },
+    "/forum/{postId}/replies/{replyId}": {
+      "schema": "ForumPost",
+      "description": "Replies to forum posts"
+    },
+    "/submissions/{submissionId}": {
+      "schema": "Submission",
+      "description": "Task submissions"
+    },
+    "/survey_responses/{responseId}": {
+      "schema": "SurveyResponse",
+      "description": "Diagnostic survey responses"
+    }
+  }
+}

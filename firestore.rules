@@ -1,0 +1,244 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {uid}
+    // Fields:
+    //   - email: string (required)
+    //   - role: string (required, 'profesor' | 'alumno')
+    //   - status: string (required, 'pending' | 'approved')
+    //   - displayName: string (optional)
+    //   - uid: string (required)
+    //
+    // Collection: modules
+    // Document ID: {moduleId}
+    // Fields:
+    //   - title: string (required)
+    //   - description: string (optional)
+    //   - visible: bool (required)
+    //   - order: number (required)
+    //   - materials: list (optional)
+    //   - extra: list (optional)
+    //   - task: map (optional)
+    //
+    // Collection: forum
+    // Document ID: {postId}
+    // Fields:
+    //   - user: string (required)
+    //   - text: string (required)
+    //   - date: string (required)
+    //   - uid: string (required)
+    //
+    // Collection: submissions
+    // Document ID: {submissionId}
+    // Fields:
+    //   - studentName: string (required)
+    //   - studentUid: string (required)
+    //   - taskId: number (required)
+    //   - fileName: string (required)
+    //   - date: string (required)
+    //   - status: string (required, 'Recibido' | 'Calificado')
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && 
+             (request.auth.token.email == "federicotechia@gmail.com" || 
+              request.auth.token.email == "fede.trillini@gmail.com");
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() || (
+        isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['profesor', 'administrador'])
+      );
+    }
+
+    function isApproved() {
+      return isSuperAdmin() || (
+        isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved' || 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['profesor', 'administrador'])
+      );
+    }
+
+    function isValidEdition(data) {
+      return data.keys().hasAll(['name', 'isActive', 'status', 'createdAt']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.isActive is bool &&
+             data.status in ['activa', 'archivada', 'planificada'] &&
+             data.createdAt is string &&
+             (!('description' in data) || (data.description is string && data.description.size() < 2000)) &&
+             (!('startDate' in data) || (data.startDate is string && data.startDate.size() < 100)) &&
+             (!('endDate' in data) || (data.endDate is string && data.endDate.size() < 100)) &&
+             (!('createdOrder' in data) || data.createdOrder is number);
+    }
+
+    function isValidUser(data, userId) {
+      return data.keys().hasAll(['email', 'role', 'status', 'uid']) &&
+             data.email is string && data.email.size() < 200 &&
+             data.role in ['profesor', 'alumno', 'administrador'] &&
+             data.status in ['pending', 'approved'] &&
+             data.uid == userId &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 200)) &&
+             (!('enrolledEditions' in data) || data.enrolledEditions is list) &&
+             (!('defaultEditionId' in data) || (data.defaultEditionId is string && data.defaultEditionId.size() < 100)) &&
+             (!('survey_completed' in data) || data.survey_completed is bool) &&
+             (!('suggested_level' in data) || data.suggested_level in ['Principiante', 'Avanzado']) &&
+             (!('teacherFeedback' in data) || (data.teacherFeedback is string && data.teacherFeedback.size() < 5000));
+    }
+
+    function isValidSurveyResponse(data) {
+      return data.keys().hasAll(['user_id', 'user_name', 'familiarity', 'tools', 'frequency', 'professional_profile', 'automation_goal', 'technical_validation', 'timestamp', 'suggested_level']) &&
+             data.user_id == request.auth.uid &&
+             data.familiarity is number && data.familiarity >= 1 && data.familiarity <= 5 &&
+             data.tools is list &&
+             data.frequency is string &&
+             data.suggested_level in ['Principiante', 'Avanzado'] &&
+             (!('editionId' in data) || (data.editionId is string && data.editionId.size() < 100)) &&
+             (!('custom_responses' in data) || data.custom_responses is map);
+    }
+
+    function isValidModule(data) {
+      return data.keys().hasAll(['title', 'visible', 'order']) &&
+             data.title is string && data.title.size() < 200 &&
+             (!('description' in data) || (data.description is string && data.description.size() < 5000)) &&
+             (!('editionId' in data) || (data.editionId is string && data.editionId.size() < 100)) &&
+             (!('materials' in data) || data.materials is list) &&
+             (!('extra' in data) || data.extra is list) &&
+             (!('notebookLMUrl' in data) || (data.notebookLMUrl is string && data.notebookLMUrl.size() < 2000)) &&
+             (!('task' in data) || data.task == null || data.task is map) &&
+             data.visible is bool &&
+             data.order is number;
+    }
+
+    function isValidPost(data) {
+      return data.keys().hasAll(['user', 'text', 'date', 'uid']) &&
+             data.user is string && data.user.size() < 100 &&
+             data.text is string && data.text.size() < 5000 &&
+             data.uid is string &&
+             (!('editionId' in data) || (data.editionId is string && data.editionId.size() < 100)) &&
+             (!('replies' in data) || data.replies is list);
+    }
+
+    function isValidSubmission(data) {
+      return data.keys().hasAll(['studentName', 'studentUid', 'taskId', 'taskTitle', 'fileName', 'fileUrl', 'date', 'status']) &&
+             data.studentName is string && data.studentName.size() < 200 &&
+             data.studentUid is string &&
+             data.taskTitle is string && data.taskTitle.size() < 200 &&
+             data.fileName is string && data.fileName.size() < 500 &&
+             data.fileUrl is string && data.fileUrl.size() < 2000 &&
+             data.status in ['Recibido', 'Calificado'] &&
+             (!('editionId' in data) || (data.editionId is string && data.editionId.size() < 100)) &&
+             (!('studentComment' in data) || (data.studentComment is string && data.studentComment.size() < 2000)) &&
+             (!('teacherFeedback' in data) || (data.teacherFeedback is string && data.teacherFeedback.size() < 5000));
+    }
+
+    function isValidTask(data) {
+      return data.keys().hasAll(['id', 'title', 'description', 'deadline', 'order']) &&
+             data.id is string &&
+             data.title is string && data.title.size() < 200 &&
+             data.description is string && data.description.size() < 5000 &&
+             data.deadline is string &&
+             (!('editionId' in data) || (data.editionId is string && data.editionId.size() < 100)) &&
+             (!('attachmentUrl' in data) || (data.attachmentUrl is string && data.attachmentUrl.size() < 2000)) &&
+             data.order is number;
+    }
+
+    function isValidSurveyConfig(data) {
+      return data.keys().hasAll(['toolsOptions', 'advancedTools', 'frequencyOptions', 'technicalOptions', 'advancedThresholdFrequency', 'advancedThresholdTechnical']) &&
+             data.toolsOptions is list &&
+             data.advancedTools is list &&
+             data.frequencyOptions is list &&
+             data.technicalOptions is list &&
+             (!('customQuestions' in data) || data.customQuestions is list);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /editions/{editionId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() && isValidEdition(request.resource.data);
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data, userId) && (
+        (isOwner(userId) && request.resource.data.role == 'alumno' && request.resource.data.status == 'pending') ||
+        isAdmin()
+      );
+      allow update: if isAuthenticated() && isValidUser(request.resource.data, userId) && (
+        (isOwner(userId) && request.resource.data.role == resource.data.role && request.resource.data.status == resource.data.status) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+    
+    match /config/survey {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() && isValidSurveyConfig(request.resource.data);
+    }
+
+    match /modules/{moduleId} {
+      allow read: if isApproved() && (resource.data.visible == true || isAdmin());
+      allow write: if isAdmin() && isValidModule(request.resource.data);
+    }
+
+    match /forum/{postId} {
+      allow read: if isApproved();
+      allow create: if isApproved() && isValidPost(request.resource.data) && request.resource.data.uid == request.auth.uid;
+      allow update: if isAdmin() || (isApproved() && resource.data.uid == request.auth.uid && isValidPost(request.resource.data));
+      allow delete: if isAdmin() || (isApproved() && resource.data.uid == request.auth.uid);
+      
+      match /replies/{replyId} {
+        allow read: if isApproved();
+        allow create: if isApproved() && isValidPost(request.resource.data) && request.resource.data.uid == request.auth.uid;
+        allow update: if isAdmin() || (isApproved() && resource.data.uid == request.auth.uid && isValidPost(request.resource.data));
+        allow delete: if isAdmin() || (isApproved() && resource.data.uid == request.auth.uid);
+      }
+    }
+
+    match /tasks/{taskId} {
+      allow read: if isApproved();
+      allow write: if isAdmin() && isValidTask(request.resource.data);
+    }
+
+    match /submissions/{submissionId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.studentUid == request.auth.uid);
+      allow create: if isApproved() && isValidSubmission(request.resource.data) && request.resource.data.studentUid == request.auth.uid && request.resource.data.status == 'Recibido';
+      allow update: if isAdmin() && isValidSubmission(request.resource.data);
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.studentUid == request.auth.uid && resource.data.status != 'Calificado');
+    }
+
+    match /survey_responses/{responseId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() && isValidSurveyResponse(request.resource.data);
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
