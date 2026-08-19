@@ -1,3 +1,4 @@
+// Plataforma Educativa - CEC Crucianelli (v2.1 Multi-Edition Release)
 import React, { useState, useEffect, ReactNode } from 'react';
 import { 
   BookOpen, 
