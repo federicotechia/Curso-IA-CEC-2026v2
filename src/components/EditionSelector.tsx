@@ -23,17 +23,45 @@ export const EditionSelector: React.FC<EditionSelectorProps> = ({
   const isAdminOrTeacher = profile.role === 'profesor' || profile.role === 'administrador';
 
   // Filter available editions based on role
-  const availableEditions = isAdminOrTeacher
-    ? editions
-    : editions.filter(e => {
-        // If student has explicit enrolledEditions, show those; otherwise show active edition
-        if (profile.enrolledEditions && profile.enrolledEditions.length > 0) {
-          return profile.enrolledEditions.includes(e.id);
-        }
-        return e.isActive;
+  const getStudentEditions = () => {
+    if (isAdminOrTeacher) return editions;
+    
+    // Check explicit student enrollments
+    const enrolledIds = profile.enrolledEditions || [];
+    const matched = editions.filter(e => enrolledIds.includes(e.id));
+    
+    if (matched.length > 0) {
+      // Sort so active edition is first, then planned, then archived
+      return [...matched].sort((a, b) => {
+        if (a.isActive && !b.isActive) return -1;
+        if (!a.isActive && b.isActive) return 1;
+        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
       });
+    }
 
-  const currentEdition = editions.find(e => e.id === selectedEditionId) || editions.find(e => e.isActive) || editions[0];
+    // Fallback: If no explicit enrollment, assign the active or latest edition
+    const activeOrLatest = editions.find(e => e.isActive && e.status !== 'archivada')
+      || editions.find(e => e.isActive)
+      || editions[editions.length - 1]
+      || editions[0];
+
+    return activeOrLatest ? [activeOrLatest] : editions;
+  };
+
+  const availableEditions = getStudentEditions();
+
+  const currentEdition = availableEditions.find(e => e.id === selectedEditionId) 
+    || availableEditions.find(e => e.isActive && e.status !== 'archivada')
+    || availableEditions[0]
+    || editions.find(e => e.id === selectedEditionId)
+    || editions[0];
+
+  useEffect(() => {
+    // If selected edition is not valid for this user, automatically select their default active edition
+    if (currentEdition && selectedEditionId !== currentEdition.id && !availableEditions.some(e => e.id === selectedEditionId)) {
+      onSelectEdition(currentEdition.id);
+    }
+  }, [availableEditions, selectedEditionId, currentEdition, onSelectEdition]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -134,11 +162,13 @@ export const EditionSelector: React.FC<EditionSelectorProps> = ({
         >
           <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between">
             <div>
-              <p className="text-xs font-black text-slate-700 uppercase tracking-wider">Ediciones del Curso</p>
+              <p className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                {isAdminOrTeacher ? 'Ediciones del Curso' : 'Mis Cursos Inscriptos'}
+              </p>
               <p className="text-[11px] text-slate-400">
                 {isAdminOrTeacher 
                   ? 'Cambia de cohorte para ver o gestionar sus contenidos' 
-                  : 'Ediciones en las que estás inscripto'}
+                  : 'Selecciona el curso al que deseas ingresar'}
               </p>
             </div>
             {isAdminOrTeacher && onOpenManageEditions && (

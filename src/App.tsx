@@ -467,7 +467,7 @@ function AppContent() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [editions, setEditions] = useState<Edition[]>([]);
-  const [selectedEditionId, setSelectedEditionId] = useState<string>(DEFAULT_EDITION_ID);
+  const [selectedEditionId, setSelectedEditionId] = useState<string>('');
   const [modules, setModules] = useState<ClassModule[]>([]);
   const [forum, setForum] = useState<ForumPost[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -476,6 +476,7 @@ function AppContent() {
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [surveyResponses, setSurveyResponses] = useState<SurveyResponse[]>([]);
   const [viewingSurveyResponse, setViewingSurveyResponse] = useState<SurveyResponse | null>(null);
+  const [managingUserEnrollment, setManagingUserEnrollment] = useState<UserProfile | null>(null);
   const [expandedModule, setExpandedModule] = useState<string | null>(null);
   const [newPost, setNewPost] = useState('');
   const [submissionUrl, setSubmissionUrl] = useState<{ [key: string]: string }>({});
@@ -603,20 +604,43 @@ function AppContent() {
 
       setEditions(fetchedEditions);
 
-      // Select active edition or first enrolled edition for student
+      // Select active edition or enrolled edition for student
       setSelectedEditionId(current => {
+        if (profile.role === 'alumno') {
+          // 1. Get valid enrolled editions
+          const enrolledIds = profile.enrolledEditions || [];
+          const matchedEditions = fetchedEditions.filter(e => enrolledIds.includes(e.id));
+          
+          const validStudentEditions = matchedEditions.length > 0
+            ? matchedEditions
+            : [fetchedEditions.find(e => e.isActive && e.status !== 'archivada') || fetchedEditions.find(e => e.isActive) || fetchedEditions[fetchedEditions.length - 1] || fetchedEditions[0]];
+
+          // If the student already selected an edition that is in their valid list, keep it
+          if (current && validStudentEditions.some(e => e && e.id === current)) {
+            return current;
+          }
+
+          // Default: Select the active edition among valid editions
+          const activeValid = validStudentEditions.find(e => e && e.isActive && e.status !== 'archivada')
+            || validStudentEditions.find(e => e && e.isActive)
+            || validStudentEditions.find(e => e && (e.status === 'activa' || e.status === 'planificada'));
+
+          if (activeValid) return activeValid.id;
+
+          // If none active, pick the newest enrolled
+          const newest = [...validStudentEditions].sort((a, b) => 
+            new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime()
+          )[0];
+
+          return newest ? newest.id : (fetchedEditions[0]?.id || DEFAULT_EDITION_ID);
+        }
+
+        // For Teacher / Admin:
         if (current && fetchedEditions.some(e => e.id === current)) {
           return current;
         }
-        if (profile.role === 'alumno') {
-          const enrolled = profile.enrolledEditions || [];
-          if (enrolled.length > 0) {
-            const matched = fetchedEditions.find(e => enrolled.includes(e.id));
-            if (matched) return matched.id;
-          }
-        }
         const active = fetchedEditions.find(e => e.isActive);
-        return active ? active.id : (fetchedEditions[0]?.id || DEFAULT_EDITION_ID);
+        return active ? active.id : (fetchedEditions[fetchedEditions.length - 1]?.id || DEFAULT_EDITION_ID);
       });
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'editions'));
 
@@ -2735,11 +2759,12 @@ function AppContent() {
                     transition={{ duration: 0.3 }}
                     className="overflow-x-auto"
                   >
-                    <table className="w-full text-left min-w-[600px]">
+                    <table className="w-full text-left min-w-[750px]">
                       <thead className="bg-slate-50 border-bottom border-slate-200">
                         <tr>
                           <th className="p-4 text-xs font-bold uppercase text-slate-400">Nombre</th>
                           <th className="p-4 text-xs font-bold uppercase text-slate-400">Email</th>
+                          <th className="p-4 text-xs font-bold uppercase text-slate-400">Edición / Cohorte</th>
                           <th className="p-4 text-xs font-bold uppercase text-slate-400">Nivel Sugerido</th>
                           <th className="p-4 text-xs font-bold uppercase text-slate-400">Rol Actual</th>
                           <th className="p-4 text-xs font-bold uppercase text-slate-400">Acciones</th>
@@ -2750,6 +2775,38 @@ function AppContent() {
                           <tr key={u.uid} className="hover:bg-slate-50 transition-colors">
                             <td className="p-4 text-sm font-medium text-slate-700">{u.displayName}</td>
                             <td className="p-4 text-sm text-slate-500">{u.email}</td>
+                            <td className="p-4">
+                              <div className="flex items-center gap-1.5 flex-wrap max-w-[220px]">
+                                {(() => {
+                                  const userEditions = editions.filter(e => u.enrolledEditions?.includes(e.id));
+                                  if (userEditions.length === 0) {
+                                    return <span className="text-[10px] text-slate-400 italic">Por defecto (Activa)</span>;
+                                  }
+                                  return userEditions.map(ed => (
+                                    <span 
+                                      key={ed.id}
+                                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                                        ed.isActive 
+                                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                                          : ed.status === 'archivada'
+                                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                          : 'bg-blue-50 text-blue-700 border-blue-200'
+                                      }`}
+                                      title={ed.name}
+                                    >
+                                      {ed.name}
+                                    </span>
+                                  ));
+                                })()}
+                                <button
+                                  onClick={() => setManagingUserEnrollment(u)}
+                                  className="p-1 text-slate-400 hover:text-brand-red transition-colors ml-1"
+                                  title="Gestionar Cursos / Cohortes Inscriptas"
+                                >
+                                  <Layers size={14} />
+                                </button>
+                              </div>
+                            </td>
                             <td className="p-4">
                               {u.suggested_level ? (
                                 <div className="flex items-center gap-2">
@@ -2800,6 +2857,13 @@ function AppContent() {
                                   Aprobar
                                 </button>
                               )}
+                              <button 
+                                onClick={() => setManagingUserEnrollment(u)}
+                                className="p-1.5 text-slate-400 hover:text-emerald-600 transition-colors"
+                                title="Asignar Ediciones"
+                              >
+                                <Layers size={16} />
+                              </button>
                               <button 
                                 onClick={() => {
                                   setGradingUserProfile(u);
@@ -3220,6 +3284,118 @@ function AppContent() {
                 </div>
               </motion.div>
             </div>
+          )}
+
+          {/* Manage User Editions Modal */}
+          {managingUserEnrollment && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-brand-dark/80 backdrop-blur-md z-50 flex items-center justify-center p-4"
+            >
+              <motion.div 
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                className="bg-white rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl border border-slate-100 space-y-6"
+              >
+                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-brand-red/10 text-brand-red flex items-center justify-center font-bold">
+                      <Layers size={20} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-black text-slate-800">Inscripción a Cursos</h3>
+                      <p className="text-xs text-slate-500 font-medium">
+                        {managingUserEnrollment.displayName} ({managingUserEnrollment.email})
+                      </p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setManagingUserEnrollment(null)}
+                    className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-50 transition-all"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                  <p className="text-xs font-bold text-slate-600">
+                    Selecciona los cursos / cohortes en las que este usuario estará inscripto:
+                  </p>
+                  {editions.map(ed => {
+                    const currentEnrolled = managingUserEnrollment.enrolledEditions || [];
+                    const isChecked = currentEnrolled.includes(ed.id);
+
+                    return (
+                      <label 
+                        key={ed.id}
+                        className={`flex items-start gap-3 p-3.5 rounded-2xl border transition-all cursor-pointer ${
+                          isChecked 
+                            ? 'bg-slate-50 border-brand-dark/20 text-slate-800' 
+                            : 'bg-white border-slate-100 hover:border-slate-200 text-slate-500'
+                        }`}
+                      >
+                        <input 
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            const updated = e.target.checked
+                              ? [...currentEnrolled, ed.id]
+                              : currentEnrolled.filter(id => id !== ed.id);
+                            setManagingUserEnrollment({
+                              ...managingUserEnrollment,
+                              enrolledEditions: updated
+                            });
+                          }}
+                          className="mt-1 w-4 h-4 text-brand-red rounded border-slate-300 focus:ring-brand-red"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-bold text-slate-800">{ed.name}</span>
+                            {ed.isActive && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-700">
+                                Activa
+                              </span>
+                            )}
+                            {ed.status === 'archivada' && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-amber-100 text-amber-700">
+                                Archivada
+                              </span>
+                            )}
+                          </div>
+                          {ed.description && (
+                            <p className="text-[11px] text-slate-400 line-clamp-1 mt-0.5">{ed.description}</p>
+                          )}
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+                  <button
+                    onClick={() => setManagingUserEnrollment(null)}
+                    className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-50 transition-all"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!managingUserEnrollment) return;
+                      await handleAssignUserEditions(
+                        managingUserEnrollment.uid, 
+                        managingUserEnrollment.enrolledEditions || []
+                      );
+                      setManagingUserEnrollment(null);
+                    }}
+                    className="px-5 py-2.5 bg-brand-red hover:bg-brand-red/90 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95"
+                  >
+                    Guardar Inscripción
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
           )}
         </AnimatePresence>
       </main>
